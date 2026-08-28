@@ -5125,6 +5125,20 @@ function loadAutoDetectMeetingsEnabled() {
   }
 }
 
+// Sync read of the auto-record setting; default OFF. When enabled, a detected
+// meeting starts recording straight away instead of posting a notification and
+// waiting for a tap. Opt-in, because it records without asking.
+function loadAutoRecordMeetingsEnabled() {
+  try {
+    const cfgPath = path.join(getUserDataDir(), 'config.json');
+    if (!fs.existsSync(cfgPath)) return false;
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
+    return cfg.auto_record_meetings_enabled === true;
+  } catch (_) {
+    return false;
+  }
+}
+
 // Same sync-read-at-startup pattern as loadAutoDetectMeetingsEnabled(), used
 // to decide whether createTray() should run at all without spawning Python.
 function loadShowMenuBarIconEnabled() {
@@ -7001,6 +7015,16 @@ async function handleMicEvent(line) {
   if (calEvent) {
     sendDebugLog(`[auto-detect] matched a calendar event`);
   }
+
+  // Auto-record skips the prompt and starts capturing immediately. Focus is
+  // suppressed: an unattended auto-start must not pull the user out of the
+  // call they are in the middle of taking.
+  if (loadAutoRecordMeetingsEnabled()) {
+    sendDebugLog(`[auto-detect] auto-record on — starting without prompting`);
+    requestAutoRecord(appName, evt, calEvent, { focus: false });
+    return;
+  }
+
   showMeetingDetectedNotification(appName, evt, calEvent);
 }
 
@@ -7063,7 +7087,7 @@ function showMeetingDetectedNotification(appName, originatingEvt, calEvent) {
   notif.show();
 }
 
-function requestAutoRecord(appName, originatingEvt, calEvent) {
+function requestAutoRecord(appName, originatingEvt, calEvent, { focus = true } = {}) {
   // Prefer the calendar event title when we matched one — it's user-authored
   // and recognisable weeks later. Otherwise fall back to the neutral
   // 'Note' placeholder that simple_recorder.py recognises in
@@ -7091,7 +7115,7 @@ function requestAutoRecord(appName, originatingEvt, calEvent) {
   // explicit tap does.) The renderer's auto-record handler then starts the
   // recording and opens the live-note editor.
   if (mainWindow && !mainWindow.isDestroyed()) {
-    exposeMainWindow();
+    if (focus) exposeMainWindow();
     mainWindow.webContents.send('auto-record-requested', { sessionName, appName });
   }
 }
