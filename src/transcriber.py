@@ -2125,6 +2125,25 @@ class WhisperTranscriber:
         # silently timed out on multi-hour files and lost speaker separation.
         split_timeout = _diarised_split_timeout(duration)
 
+        def _discard_partials():
+            """Remove whatever ffmpeg wrote before a failure.
+
+            transcribe_diarised unlinks these two files in a ``finally``, but
+            that block only guards the span AFTER this method has RETURNED
+            them. Every failure path below returns ``(None, None, None)``
+            instead, so the caller never enters that span and anything already
+            written stays in the temp dir permanently. The names are
+            deterministic rather than mkstemp'd, so a leaked partial is only
+            ever reclaimed by a later successful split of the same stem —
+            otherwise it survives until the OS clears the temp dir. At 16 kHz
+            mono PCM a multi-hour recording leaks in the hundreds of MB.
+            """
+            for partial in (mic_path, system_path):
+                try:
+                    partial.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
         try:
             for ch_idx, out_path in [(0, mic_path), (1, system_path)]:
                 # High-pass only on the diarised path — deliberately NO
@@ -2141,6 +2160,7 @@ class WhisperTranscriber:
                 )
                 if result.returncode != 0:
                     logger.error(f"Channel {ch_idx} extraction failed: {result.stderr.decode()}")
+                    _discard_partials()
                     return None, None, None
 
             # If ffprobe couldn't get duration from the container (e.g. WebM),
@@ -2158,6 +2178,7 @@ class WhisperTranscriber:
             return mic_path, system_path, duration
         except Exception as e:
             logger.error(f"Channel splitting error: {e}")
+            _discard_partials()
             return None, None, None
 
     def _check_rms_energy(self, audio_path: Path, threshold: float = MIN_RMS_THRESHOLD) -> bool:

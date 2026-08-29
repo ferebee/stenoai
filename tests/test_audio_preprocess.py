@@ -216,3 +216,64 @@ class TranscribeAudioPreprocessIntegrationTests(unittest.TestCase):
             af = cmd[cmd.index("-af") + 1]
             self.assertIn(f"highpass=f={transcriber_mod.AUDIO_HIGHPASS_HZ}", af)
             self.assertNotIn("loudnorm", af)
+
+    def test_split_failure_removes_partial_channel_files(self):
+        """A failed channel extraction must not leave its partial WAVs behind.
+
+        transcribe_diarised's `finally` only unlinks these files once the
+        split has RETURNED them, so a failure path that returns
+        (None, None, None) has to clean up after itself.
+        """
+        transcriber = _build_transcriber()
+
+        def fake_run(cmd, **kwargs):
+            if "-t" in cmd:  # channel-count probe
+                return SimpleNamespace(
+                    returncode=0,
+                    stderr="Audio: pcm_s16le, stereo\nDuration: 00:00:10.00",
+                    stdout="",
+                )
+            # ffmpeg writes a truncated file, THEN reports failure — the
+            # realistic shape of a mid-decode error.
+            Path(cmd[-1]).write_bytes(b"\x00" * 64)
+            failed = cmd[cmd.index("-af") + 1].startswith("pan=mono|c0=c1")
+            return SimpleNamespace(returncode=1 if failed else 0, stderr=b"boom")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            audio = _make_audio_file(tmp_dir)
+            with patch.object(transcriber_mod, "_resolve_ffmpeg", return_value="/fake/ffmpeg"), \
+                 patch.object(transcriber_mod.tempfile, "gettempdir", return_value=tmp_dir), \
+                 patch.object(transcriber_mod.subprocess, "run", side_effect=fake_run):
+                result = transcriber._split_stereo_to_channels(audio)
+
+            self.assertEqual(result, (None, None, None))
+            # Channel 0 succeeded and channel 1 failed; NEITHER may survive.
+            leaked = sorted(p.name for p in Path(tmp_dir).glob("stenoai_ch*.wav"))
+            self.assertEqual(leaked, [])
+
+    def test_split_exception_removes_partial_channel_files(self):
+        """The same guarantee on the exception path (e.g. a split timeout)."""
+        transcriber = _build_transcriber()
+
+        def fake_run(cmd, **kwargs):
+            if "-t" in cmd:
+                return SimpleNamespace(
+                    returncode=0,
+                    stderr="Audio: pcm_s16le, stereo\nDuration: 00:00:10.00",
+                    stdout="",
+                )
+            Path(cmd[-1]).write_bytes(b"\x00" * 64)
+            if cmd[cmd.index("-af") + 1].startswith("pan=mono|c0=c1"):
+                raise transcriber_mod.subprocess.TimeoutExpired(cmd, 1)
+            return SimpleNamespace(returncode=0, stderr=b"")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            audio = _make_audio_file(tmp_dir)
+            with patch.object(transcriber_mod, "_resolve_ffmpeg", return_value="/fake/ffmpeg"), \
+                 patch.object(transcriber_mod.tempfile, "gettempdir", return_value=tmp_dir), \
+                 patch.object(transcriber_mod.subprocess, "run", side_effect=fake_run):
+                result = transcriber._split_stereo_to_channels(audio)
+
+            self.assertEqual(result, (None, None, None))
+            leaked = sorted(p.name for p in Path(tmp_dir).glob("stenoai_ch*.wav"))
+            self.assertEqual(leaked, [])
