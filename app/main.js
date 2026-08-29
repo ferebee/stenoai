@@ -9808,6 +9808,14 @@ ipcMain.handle('get-recordings-dir', async () => {
 let activeSysAudioWriteStream = null;
 let activeSysAudioFilePath = null;
 let activeSysAudioBytesWritten = 0;
+// Set when the WriteStream errors mid-recording. Everything flushed before the
+// failure is still a decodable WebM prefix — the same property the incremental
+// write exists to guarantee for a crash — so the path survives the stream being
+// dropped and close() can still hand it to the processing queue. Without this
+// the recording is silently orphaned in recordings/: close() reports "no open
+// file", the renderer's handoff never runs, and the user loses the meeting.
+let failedSysAudioFilePath = null;
+let failedSysAudioBytesWritten = 0;
 // Deterministic summary-file path for the current recording, derived from the
 // audio filename at open. Kept separate from activeSysAudioFilePath (which the
 // renderer's close nulls) so stop-recording-ui can still write the instant-stop
@@ -9840,6 +9848,12 @@ ipcMain.handle('open-system-audio-file', async (_event, sessionName) => {
     stream.on('error', (err) => {
       sendDebugLog(`[sysaudio] write stream error: ${err.message}`);
       if (activeSysAudioWriteStream === stream) {
+        // Hand the partial over to the failed-* slots before clearing the
+        // active ones. Appends must still fail (the renderer needs to know the
+        // file is truncated, and already surfaces "Recording may be
+        // incomplete"), but the bytes on disk are the user's only copy.
+        failedSysAudioFilePath = activeSysAudioFilePath;
+        failedSysAudioBytesWritten = activeSysAudioBytesWritten;
         activeSysAudioWriteStream = null;
         activeSysAudioFilePath = null;
         activeSysAudioBytesWritten = 0;
@@ -9849,6 +9863,10 @@ ipcMain.handle('open-system-audio-file', async (_event, sessionName) => {
     activeSysAudioFilePath = filePath;
     activeSysAudioSummaryFile = summaryFileForAudio(filePath);
     activeSysAudioBytesWritten = 0;
+    // A prior recording's failed partial must never be returned by THIS
+    // recording's close().
+    failedSysAudioFilePath = null;
+    failedSysAudioBytesWritten = 0;
     sendDebugLog(`[sysaudio] opened ${filename} for incremental write`);
     return { success: true, filePath };
   } catch (error) {
@@ -9896,6 +9914,28 @@ ipcMain.handle('close-system-audio-file', async () => {
   activeSysAudioFilePath = null;
   activeSysAudioBytesWritten = 0;
   if (!stream) {
+    // The stream errored mid-recording (ENOSPC, EIO). Recover whatever it
+    // flushed: a truncated WebM is still decodable by ffmpeg, so processing it
+    // yields a note for the part that was captured instead of dead-ending on
+    // "no open file" — which left the renderer's stop path with nothing to hand
+    // off (it only logs to the console), silently losing an entire meeting that
+    // was sitting complete-enough on disk.
+    const failedPath = failedSysAudioFilePath;
+    const failedBytes = failedSysAudioBytesWritten;
+    failedSysAudioFilePath = null;
+    failedSysAudioBytesWritten = 0;
+    if (failedPath && failedBytes > 0) {
+      sendDebugLog(
+        `[sysaudio] recovering truncated ${path.basename(failedPath)} (${failedBytes} bytes) after write failure`
+      );
+      return { success: true, filePath: failedPath, truncated: true };
+    }
+    if (failedPath) {
+      // Failed before any bytes landed — same disposition as the zero-byte
+      // close below: remove it rather than leave a stray .webm.
+      try { fs.unlinkSync(failedPath); } catch (_) { /* */ }
+      sendDebugLog(`[sysaudio] write failed before any audio landed, removed ${path.basename(failedPath)}`);
+    }
     return { success: false, error: 'No open system audio file' };
   }
   try {
