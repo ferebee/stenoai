@@ -1010,21 +1010,25 @@ Summary output language: {config.get_language_name(output_language)}
 
 
 # ── Declared-field extraction ────────────────────────────────────────────
-_JSON_BLOCK_RE = re.compile(r"```json[ \t]*\n(.*?)```", re.S)
+# Any fenced block, tagged or not: a model that writes ``` or ```JSON instead of
+# ```json is one label away from correct, and the json.loads below is the real
+# test of whether the content is usable. Each candidate is tried in turn.
+_FENCED_BLOCK_RE = re.compile(r"```[A-Za-z]*[ \t]*\n(.*?)```", re.S)
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def _split_json_block(text: str):
-    """Return (data_or_None, prose). Removes the block from the prose."""
-    m = _JSON_BLOCK_RE.search(text or "")
-    if not m:
-        return None, (text or "").strip()
-    prose = ((text[:m.start()] + text[m.end():]) or "").strip()
-    try:
-        data = json.loads(m.group(1))
-    except (ValueError, TypeError):
-        return None, prose
-    return (data if isinstance(data, dict) else None), prose
+    """Return (data_or_None, prose). Removes the matched block from the prose."""
+    text = text or ""
+    for m in _FENCED_BLOCK_RE.finditer(text):
+        try:
+            data = json.loads(m.group(1))
+        except (ValueError, TypeError):
+            continue
+        if isinstance(data, dict):
+            prose = (text[:m.start()] + text[m.end():]).strip()
+            return data, prose
+    return None, text.strip()
 
 
 def _coerce_field(value, ftype: str):

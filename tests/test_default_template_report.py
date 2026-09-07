@@ -282,3 +282,32 @@ class ReportCompletenessTests(unittest.TestCase):
                 note_title="Call — 2026-09-06 11:54")
             note_fm, _ = report_store._split_frontmatter(mp.read_text(encoding="utf-8"))
             self.assertEqual(note_fm["title"], "ABC GmbH: Exchange")
+
+
+class JsonBlockToleranceTests(unittest.TestCase):
+    """The model has to emit a fenced json block. Accept near-misses on the
+    fence LABEL — a model once emitted ```fields, copying the declaration's own
+    shape — and let json.loads be the real test of usability."""
+
+    def test_untagged_fence_is_accepted(self):
+        data, prose = simple_recorder._split_json_block(
+            '```\n{"client": "ABC"}\n```\n\nprose here\n')
+        self.assertEqual(data, {"client": "ABC"})
+        self.assertEqual(prose, "prose here")
+
+    def test_wrong_label_is_accepted_when_the_content_is_json(self):
+        data, _ = simple_recorder._split_json_block(
+            '```JSON\n{"client": "ABC"}\n```\n\nprose\n')
+        self.assertEqual(data, {"client": "ABC"})
+
+    def test_a_non_json_block_is_skipped_and_a_later_json_block_found(self):
+        data, prose = simple_recorder._split_json_block(
+            '```fields\nclient: ABC\n```\n\n```json\n{"client": "ABC"}\n```\n\nprose\n')
+        self.assertEqual(data, {"client": "ABC"})
+        self.assertIn("```fields", prose)   # only the json block is consumed
+
+    def test_no_json_anywhere_returns_none_and_keeps_everything(self):
+        text = '```fields\nclient: ABC\nsymptoms: null\n```\n\nprose\n'
+        data, prose = simple_recorder._split_json_block(text)
+        self.assertIsNone(data)
+        self.assertEqual(prose, text.strip())

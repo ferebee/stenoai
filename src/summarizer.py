@@ -144,18 +144,28 @@ def build_fields_instruction(fields: list) -> str:
     """
     if not fields:
         return ""
+    _EMPTY = {"list": "[]", "checkbox": "false", "number": "0"}
+    skeleton = ",\n".join(
+        f'  "{f["name"]}": {_EMPTY.get(f["type"], "null")}' for f in fields)
+
     width = max(len(f["name"]) for f in fields)
-    lines = []
-    for f in fields:
-        desc = f" {f['description']}" if f.get("description") else ""
-        lines.append(f"  {f['name']:<{width}}  ({f['type']}){desc}")
+    meanings = "\n".join(
+        f"  {f['name']:<{width}}  {f.get('description') or f['type']}"
+        for f in fields)
+
+    # The skeleton is shown as literal JSON rather than as an aligned
+    # name/type/description table: given a table, models reproduce the TABLE
+    # (one emitted a ```fields block copying the declaration's own shape) and
+    # extraction then finds no json at all.
     return (
-        "\n\nBegin the report with a fenced ```json block containing exactly "
-        "these keys, then the prose report below it:\n\n"
-        + "\n".join(lines)
-        + "\n\nUse null, or [] for a list, when something was not established — "
-        "never guess to fill a field. Dates are YYYY-MM-DD. A checkbox is true "
-        "or false. Emit the json block first, then the prose."
+        "\n\nBegin your reply with a fenced ```json block in exactly this shape, "
+        "with exactly these keys and no others:\n\n"
+        "```json\n{\n" + skeleton + "\n}\n```\n\n"
+        "What each key means:\n\n" + meanings + "\n\n"
+        "It must be valid JSON: double-quoted keys and strings, no comments, no "
+        "trailing commas. Leave a value at null (or [] for a list) when the call "
+        "did not establish it — never guess to fill a field. Dates are "
+        "YYYY-MM-DD. After the closing ``` write the prose report."
     )
 
 
