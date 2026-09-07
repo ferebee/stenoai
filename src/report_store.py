@@ -6,7 +6,10 @@ older/reprocessed ones may be `<stem>_summary.json`. Generated template reports
 and the active-report pointer live in a SIDECAR `<stem>_reports.json`, so the
 report feature works on both formats without touching the canonical note file.
 """
+import datetime
 import json
+
+import yaml
 from pathlib import Path
 
 
@@ -46,30 +49,46 @@ def save_sidecar(meeting_path, sidecar: dict) -> None:
 
 
 def _split_frontmatter(text: str):
-    """Return (frontmatter_dict, body). Frontmatter is the first --- ... --- block."""
+    """Return (frontmatter_dict, body). Frontmatter is the first --- ... --- block.
+
+    Parsed with a real YAML loader rather than by hand. The writer has always
+    emitted valid YAML, so this reads every existing note unchanged — and it
+    fixes two ways the hand-rolled parser disagreed with its JavaScript twin
+    (main.js parseMeetingMarkdown): `strip('"')` corrupted values containing
+    escaped quotes, and ints/bools/lists came back as strings, so `folders`
+    read as the string "[]" and duration_seconds as "103".
+
+    Empty and `null` values still normalize to None (#283): a provenance key
+    like detected_language must not look engine-backed when it is unset.
+    """
     fm = {}
     body = text
     if text.startswith("---"):
         end = text.find("\n---", 3)
         if end != -1:
-            block = text[3:end].strip("\n")
+            block = text[3:end]
             body = text[end + 4:].lstrip("\n")
-            for line in block.splitlines():
-                if ":" in line:
-                    k, _, v = line.partition(":")
-                    v = v.strip()
-                    # Coerce the serialised-None forms to real None (in ONE
-                    # place, for every consumer): the writer emits missing values
-                    # as unquoted `null`, and an empty value reads back as "".
-                    # Leaving them as the truthy strings "null"/"" would make a
-                    # provenance key like detected_language look engine-backed and
-                    # wrongly pin an auto/Parakeet note's language (#283). Mirrors
-                    # _parse_meeting_markdown's null handling.
-                    if v == "null" or v == "":
-                        fm[k.strip()] = None
-                    else:
-                        fm[k.strip()] = v.strip('"')
+            try:
+                loaded = yaml.safe_load(block)
+            except yaml.YAMLError:
+                loaded = None
+            if isinstance(loaded, dict):
+                for k, v in loaded.items():
+                    fm[str(k)] = _normalize_fm_value(v)
     return fm, body
+
+
+def _normalize_fm_value(v):
+    """Empty string -> None (#283); dates -> ISO strings.
+
+    A bare `date: 2026-09-02` (hand-edited, not written by us) would otherwise
+    load as a datetime object and break consumers expecting a string.
+    """
+    if isinstance(v, str) and v == "":
+        return None
+    if isinstance(v, (datetime.datetime, datetime.date)):
+        return v.isoformat()
+    return v
 
 
 def _split_on_heading(body: str, heading: str):
