@@ -170,25 +170,35 @@ _DESC_SPLIT_RE = re.compile(r"\s+(?:—|--)\s+")
 
 
 def parse_fields_block(prompt: str):
-    """Split a prompt into (fields, prose).
+    """Split a prompt into (fields, prose, error).
 
-    `fields` is a list of {name, type, basis, description}; empty when the
-    prompt declares none, which is the common case and means the template
-    behaves exactly as it always has. Never raises — a malformed block yields
-    no fields, and validate_fields() is what reports why.
+    `fields` is a list of {name, type, basis, description}. `error` is None on
+    success, and a message when a block IS present but unusable.
+
+    That distinction matters: "this template declares no fields" and "this
+    template's declaration is broken" look identical from the outside but mean
+    opposite things, and conflating them once cost a debugging session. A
+    declaration containing `client: text — the OTHER party: person or company`
+    is invalid YAML (the second `: `), silently yielded no fields, and the
+    template ran as plain prose with no extraction and no complaint.
+
+    Never raises.
     """
     if not isinstance(prompt, str):
-        return [], ""
+        return [], "", None
     m = FIELDS_BLOCK_RE.search(prompt)
     if not m:
-        return [], prompt
+        return [], prompt, None
     prose = (prompt[:m.start()] + prompt[m.end():]).strip()
     try:
         loaded = yaml.safe_load(m.group(1))
-    except yaml.YAMLError:
-        return [], prose
+    except yaml.YAMLError as e:
+        detail = str(e).split("\n")[0]
+        return [], prose, (
+            f"the ```fields block is not valid YAML ({detail}). A description "
+            f"containing ': ' breaks the line — use a comma or a dash instead")
     if not isinstance(loaded, dict):
-        return [], prose
+        return [], prose, "the ```fields block must be a list of 'name: type' lines"
     fields = []
     for name, decl in loaded.items():
         decl = "" if decl is None else str(decl)
@@ -202,7 +212,7 @@ def parse_fields_block(prompt: str):
             "basis": basis,
             "description": description[:MAX_FIELD_DESC_LEN],
         })
-    return fields, prose
+    return fields, prose, None
 
 
 def validate_fields(fields: list) -> tuple:

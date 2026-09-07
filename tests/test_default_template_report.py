@@ -311,3 +311,31 @@ class JsonBlockToleranceTests(unittest.TestCase):
         data, prose = simple_recorder._split_json_block(text)
         self.assertIsNone(data)
         self.assertEqual(prose, text.strip())
+
+
+class MalformedFieldsBlockTests(unittest.TestCase):
+    """A broken declaration must be loud. Silently reading it as 'no fields'
+    made a template run as plain prose with no extraction and no complaint."""
+
+    def test_colon_in_a_description_is_reported(self):
+        from src.templates import parse_fields_block
+        fields, _, err = parse_fields_block(
+            "Prose.\n\n```fields\n"
+            "client: text — the OTHER party: person or company\n"
+            "```\n")
+        self.assertEqual(fields, [])
+        self.assertIsNotNone(err)
+        self.assertIn("not valid YAML", err)
+
+    def test_absent_block_is_not_an_error(self):
+        from src.templates import parse_fields_block
+        fields, prose, err = parse_fields_block("Just prose, no declaration.")
+        self.assertEqual(fields, [])
+        self.assertIsNone(err)
+        self.assertEqual(prose, "Just prose, no declaration.")
+
+    def test_declared_fields_for_surfaces_the_error(self):
+        fields, _, instruction = simple_recorder.declared_fields_for(
+            "Prose.\n\n```fields\nclient: text — a: b\n```\n", "tid")
+        self.assertEqual(fields, [])
+        self.assertEqual(instruction, "")

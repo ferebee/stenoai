@@ -1193,7 +1193,13 @@ def declared_fields_for(prompt: str, template_id: str):
     is invalid, which is logged rather than raised.
     """
     from src.templates import parse_fields_block, validate_fields
-    fields, prose = parse_fields_block(prompt)
+    fields, prose, err = parse_fields_block(prompt)
+    if err:
+        # A broken declaration must never look like "declares no fields": the
+        # template would run as plain prose with no extraction and no complaint.
+        logger.warning(f"[template-data] {template_id}: {err}")
+        print(f"TEMPLATE_FIELDS_INVALID:{template_id}", flush=True)
+        return [], prose, ""
     if not fields:
         return [], prompt, ""
     ok, err = validate_fields(fields)
