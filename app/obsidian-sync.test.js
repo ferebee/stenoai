@@ -247,3 +247,28 @@ test('first sync never clobbers a pre-existing untracked vault file (H1)', () =>
     'mirror written to a free, stem-suffixed name');
   fs.rmSync(h.root, { recursive: true, force: true });
 });
+
+test('transformNote without a report is unchanged apart from carried-through keys', () => {
+  const note = '---\ntitle: "T"\nduration_seconds: 103\nlanguage: "de"\n---\n\n## Summary\nbody\n';
+  const { vaultBody } = transformNote(note, { stem: 'x', resolveFolderName: () => null });
+  assert.match(vaultBody, /^---\ntitle: "T"\n/);
+  assert.match(vaultBody, /duration_seconds: 103/);   // previously dropped
+  assert.match(vaultBody, /language: "de"/);          // previously dropped
+  assert.match(vaultBody, /## Summary\nbody/);
+});
+
+test('transformNote uses the active report body and merges its frontmatter', () => {
+  const note = '---\ntitle: "Note title"\nlanguage: "de"\n---\n\n## Summary\nnote body\n';
+  const report = '---\ntitle: "Report title"\nclient: "Erika Mustermann"\n'
+    + 'systems_touched: ["Synology", "Time Machine"]\nbillable: true\n---\n\n'
+    + '## Zusammenfassung\nreport body\n';
+  const { vaultBody, title } = transformNote(note,
+    { stem: 'x', resolveFolderName: () => null, report });
+  assert.equal(title, 'Report title');                    // report wins
+  assert.match(vaultBody, /language: "de"/);              // note fills the gap
+  assert.match(vaultBody, /client: "Erika Mustermann"/);
+  assert.match(vaultBody, /systems_touched:\n  - "Synology"\n  - "Time Machine"/);
+  assert.match(vaultBody, /billable: true/);
+  assert.match(vaultBody, /## Zusammenfassung\nreport body/);
+  assert.doesNotMatch(vaultBody, /note body/);            // report replaces it
+});
