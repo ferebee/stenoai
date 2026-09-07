@@ -41,11 +41,41 @@ Follow up Monday.
 
 // --- pure helpers ----------------------------------------------------------
 
-test('parseFrontmatter reads line-based frontmatter + JSON folders array', () => {
+test('parseFrontmatter reads frontmatter with a real YAML loader', () => {
   const { fm, body } = parseFrontmatter(NOTE);
   assert.equal(fm.title, 'Acme Q3 Planning');
-  assert.equal(fm.folders, '["fold1234"]');
+  // A real loader types this: it was previously the string '["fold1234"]'.
+  assert.deepEqual(fm.folders, ['fold1234']);
+  assert.equal(fm.is_diarised, true);
   assert.ok(body.startsWith('## Summary'));
+});
+
+test('parseFrontmatter handles a report\'s real YAML: lists and colons in values', () => {
+  // A template report's front matter is written by a YAML writer, not by
+  // _render_frontmatter. The old line-based parser turned the list item below
+  // into a key `- Erneut senden der Mail (11` and kept single quotes attached.
+  const report = [
+    '---',
+    "title: 'Client: Unterstützung bei E-Mail-Versand'",
+    'changes_made:',
+    '- Erneut senden der Vorlage-Mail (11:36 Uhr), um eine Kopie zu erstellen.',
+    '- Übernahme der Empfängerliste aus Excel.',
+    'organisation: null',
+    'billable: true',
+    '---',
+    '',
+    '## Zusammenfassung',
+    'Es lief gut.',
+  ].join('\n');
+  const { fm, body } = parseFrontmatter(report);
+  assert.equal(fm.title, 'Client: Unterstützung bei E-Mail-Versand');
+  assert.deepEqual(fm.changes_made, [
+    'Erneut senden der Vorlage-Mail (11:36 Uhr), um eine Kopie zu erstellen.',
+    'Übernahme der Empfängerliste aus Excel.',
+  ]);
+  assert.equal(fm.organisation, null);
+  assert.equal(fm.billable, true);
+  assert.ok(body.startsWith('## Zusammenfassung'));
 });
 
 test('transformNote strips transcript, lifts participants, adds Obsidian props', () => {

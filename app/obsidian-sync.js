@@ -27,6 +27,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const yaml = require('js-yaml');
 
 const SUMMARY_SUFFIX = '_summary.md';
 const STATE_VERSION = 1;
@@ -69,8 +70,14 @@ function rmWithRetry(p) {
 }
 function renameWithRetry(from, to) { retryTransient(() => fs.renameSync(from, to)); }
 
-// Parse Steno's line-by-line frontmatter (NOT nested YAML — `folders:` is a
-// one-line JSON array). Returns { fm, body }. Mirrors report_store._split_frontmatter.
+// Parse front matter with a real YAML loader. Returns { fm, body }.
+//
+// This was a line-based parser that split on the first colon. That is adequate
+// for a note written by _render_frontmatter, but NOT for a template report,
+// whose front matter is emitted by a real YAML writer and contains block
+// sequences and quoted scalars. The old parser turned a list item like
+// `- Erneut senden der Mail (11:36 Uhr)` into a key `- Erneut senden der Mail (11`
+// and left single-quoted values with their quotes still attached.
 function parseFrontmatter(raw) {
   if (!raw.startsWith('---')) return { fm: {}, body: raw };
   const rest = raw.slice(3);
@@ -78,18 +85,15 @@ function parseFrontmatter(raw) {
   if (end === -1) return { fm: {}, body: raw };
   const block = rest.slice(0, end);
   const body = rest.slice(end + 4).replace(/^(?:\r?\n)+/, '');
+  let loaded = null;
+  try { loaded = yaml.load(block); } catch (_) { loaded = null; }
   const fm = {};
-  for (const line of block.split('\n')) {
-    const t = line.trim();
-    if (!t || t.startsWith('#')) continue;
-    const i = t.indexOf(':');
-    if (i === -1) continue;
-    const key = t.slice(0, i).trim();
-    let val = t.slice(i + 1).trim();
-    if (val.length >= 2 && val[0] === '"' && val[val.length - 1] === '"') {
-      val = val.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+  if (loaded && typeof loaded === 'object' && !Array.isArray(loaded)) {
+    for (const [k, v] of Object.entries(loaded)) {
+      // Empty string -> null (#283); a bare date would load as a Date, keep the
+      // string form so consumers see what was written.
+      fm[k] = v === '' ? null : (v instanceof Date ? v.toISOString() : v);
     }
-    fm[key] = val;
   }
   return { fm, body };
 }
@@ -198,8 +202,12 @@ function transformNote(raw, { stem, resolveFolderName, report = null }) {
   // date must never inject path separators / '..' into the vault path.
   const rawDate = fm.date ? String(fm.date).slice(0, 10) : '';
   const dateStr = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : '';
+  // A real YAML loader returns folders as an array; older hand-written notes
+  // may still carry it as a one-line JSON string.
   let folderIds = [];
-  if (fm.folders) {
+  if (Array.isArray(fm.folders)) {
+    folderIds = fm.folders;
+  } else if (fm.folders) {
     try { folderIds = JSON.parse(fm.folders); } catch (_) { folderIds = []; }
   }
   const folderName = folderIds.length && typeof resolveFolderName === 'function'
