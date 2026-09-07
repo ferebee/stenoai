@@ -1111,6 +1111,62 @@ def _summarizer_fields_instruction(fields: list) -> str:
     return build_fields_instruction(fields)
 
 
+def declared_fields_for(prompt: str, template_id: str):
+    """(fields, prose_prompt, fields_instruction) for a template's prompt.
+
+    Returns no fields when the template declares none — the common case, which
+    leaves the caller's behaviour exactly as it was — or when the declaration
+    is invalid, which is logged rather than raised.
+    """
+    from src.templates import parse_fields_block, validate_fields
+    fields, prose = parse_fields_block(prompt)
+    if not fields:
+        return [], prompt, ""
+    ok, err = validate_fields(fields)
+    if not ok:
+        logger.warning(f"[template-data] {template_id}: invalid field declaration "
+                       f"({err}); generating prose only")
+        return [], prompt, ""
+    return fields, prose, _summarizer_fields_instruction(fields)
+
+
+def apply_declared_fields(content: str, fields: list, template_id: str, regenerate=None):
+    """Turn a template's raw output into a report with YAML front matter.
+
+    Shared by every path that produces a template report — the recording
+    pipeline and the standalone `generate-report` command — so extraction can
+    never be wired into one of them and be silently missing from the others.
+
+    Returns (content, raw_json). With no declared fields, or when the model's
+    json cannot be parsed even after a retry, `content` comes back unchanged
+    and `raw_json` is None: a report is never lost to this step.
+
+    `regenerate` is an optional zero-arg callable used for the single retry.
+    """
+    if not fields:
+        return content, None
+
+    data, prose = _split_json_block(content)
+    if data is None and regenerate is not None:
+        # OPEN (see TEMPLATE-DATA-DESIGN.md): one retry, deliberately loud --
+        # it costs a full second pass over the transcript.
+        logger.warning(f"[template-data] RETRY: no valid json block from {template_id} "
+                       f"— regenerating (a second pass over the transcript)")
+        print(f"TEMPLATE_DATA_RETRY:{template_id}", flush=True)
+        retried = regenerate()
+        if retried:
+            data, prose = _split_json_block(retried)
+    if data is None:
+        logger.warning(f"[template-data] {template_id}: no valid json; keeping prose only")
+        print(f"TEMPLATE_DATA_FAILED:{template_id}", flush=True)
+        return content, None
+
+    fm, problems = _build_field_frontmatter(data, fields, template_id)
+    for prob in problems:
+        logger.warning(f"[template-data] {template_id}: {prob}")
+    return _render_report_with_frontmatter(fm, prose), json.dumps(data, ensure_ascii=False)
+
+
 def generate_default_template_report(summary_path, transcript, notes, language,
                                      duration_minutes, config, summarizer):
     """Best-effort: if the configured default template is not 'standard', generate
@@ -1133,15 +1189,7 @@ def generate_default_template_report(summary_path, transcript, notes, language,
         # alive; a distinct label avoids polluting the parsed summary stream.
         # A template may declare structured fields in its prompt; the prose half
         # is what remains once that block is removed.
-        from src.templates import parse_fields_block, validate_fields
-        fields, prose_prompt = parse_fields_block(tmpl["prompt"])
-        if fields:
-            ok, err = validate_fields(fields)
-            if not ok:
-                logger.warning(f"[template-data] {tid}: invalid field declaration ({err}); "
-                               f"generating prose only")
-                fields = []
-        fields_instruction = _summarizer_fields_instruction(fields)
+        fields, prose_prompt, fields_instruction = declared_fields_for(tmpl["prompt"], tid)
 
         def _run():
             heartbeat = _start_summary_heartbeat(label="default-report")
@@ -1165,28 +1213,8 @@ def generate_default_template_report(summary_path, transcript, notes, language,
         if not content:
             return None
 
-        raw_json = None
-        if fields:
-            data, prose = _split_json_block(content)
-            if data is None:
-                # OPEN (see TEMPLATE-DATA-DESIGN.md): one retry, deliberately
-                # loud. A retry is a full second pass over the transcript, so
-                # this needs to stay visible until we know how often it fires.
-                logger.warning(f"[template-data] RETRY: no valid json block from {tid} "
-                               f"— regenerating (this costs a second pass over the transcript)")
-                print(f"TEMPLATE_DATA_RETRY:{tid}", flush=True)
-                content = _run()
-                data, prose = _split_json_block(content) if content else (None, "")
-            if data is None:
-                logger.warning(f"[template-data] {tid}: no valid json after retry; "
-                               f"keeping prose only")
-                print(f"TEMPLATE_DATA_FAILED:{tid}", flush=True)
-            else:
-                fm, problems = _build_field_frontmatter(data, fields, tid)
-                for prob in problems:
-                    logger.warning(f"[template-data] {tid}: {prob}")
-                raw_json = json.dumps(data, ensure_ascii=False)
-                content = _render_report_with_frontmatter(fm, prose)
+        content, raw_json = apply_declared_fields(content, fields, tid, regenerate=_run)
+
         sidecar = _store.load_sidecar(summary_path)
         report = _reports.make_report(tid, tmpl["name"], summarizer.model_name, content)
         if raw_json is not None:
@@ -4041,16 +4069,27 @@ def generate_report(summary_file, template_id):
         from src.summarizer import OllamaSummarizer
         recorder.summarizer = OllamaSummarizer()
 
+    # Declared fields drive a generated json instruction; the prose half of the
+    # prompt is what remains once the block is removed. Shared with the
+    # recording pipeline so this command cannot drift out of step with it.
+    _fields, _prose_prompt, _fields_instruction = declared_fields_for(
+        tmpl["prompt"], template_id)
+
+    def _stream_report(progress=None):
+        kwargs = {"template_prompt": _prose_prompt}
+        if _fields_instruction:
+            kwargs["fields_instruction"] = _fields_instruction
+        if progress is not None:
+            kwargs["progress_callback"] = progress
+        return recorder.summarizer.summarize_transcript_streaming(
+            transcript, duration_minutes, output_language, notes_text, **kwargs)
+
     print("Generating report...", flush=True)
     streamed_chunks = []
     summary_heartbeat = _start_summary_heartbeat()
     _stream_error = None
     try:
-        for chunk in recorder.summarizer.summarize_transcript_streaming(
-            transcript, duration_minutes, output_language, notes_text,
-            progress_callback=_emit_progress,
-            template_prompt=tmpl["prompt"],
-        ):
+        for chunk in _stream_report(progress=_emit_progress):
             summary_heartbeat.set()
             encoded = base64.b64encode(chunk.encode('utf-8')).decode('ascii')
             sys.stdout.write(f"CHUNK:{encoded}\n")
@@ -4074,12 +4113,20 @@ def generate_report(summary_file, template_id):
         print("STREAM_ERROR:Model returned an empty report", flush=True)
         sys.exit(1)
 
+    streamed_md, raw_json = apply_declared_fields(
+        streamed_md, _fields, template_id,
+        regenerate=lambda: "".join(_stream_report()).strip(),
+    )
+
     # Write the sidecar BEFORE emitting STREAM_COMPLETE so the renderer's
     # refetch (triggered by the completion event) never reads stale data.
     sidecar = report_store.load_sidecar(summary_path)
     report = _rpts.make_report(
         template_id, tmpl["name"], recorder.summarizer.model_name, streamed_md
     )
+    if raw_json is not None:
+        # Kept for debugging a field that came out wrong; never in `content`.
+        report["raw_json"] = raw_json
     _rpts.append_report(sidecar, report)
     report_store.save_sidecar(summary_path, sidecar)
     print("STREAM_COMPLETE", flush=True)

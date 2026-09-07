@@ -101,6 +101,51 @@ class GenerateReportCliTests(unittest.TestCase):
             # Meeting file itself must NOT be modified (it's still a .md).
             self.assertTrue(summary.read_text().startswith("---"))
 
+    def test_declared_fields_are_extracted_on_this_path_too(self):
+        """Regression: field extraction was wired into the recording pipeline
+        only, so this command produced prose with the raw json block left in."""
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = _write_summary(tmp)
+            cfg = Config(config_path=Path(tmp) / "config.json")
+            ok, _, saved = cfg.save_template({
+                "name": "Fields", "language": "auto",
+                "prompt": "Write a record.\n\n```fields\n"
+                          "client: text — who was on the call\n"
+                          "billable: checkbox (inferred) — is this billable\n"
+                          "```\n\n## Zusammenfassung\nShort.",
+            })
+            assert ok
+
+            fake_summarizer = mock.MagicMock()
+            fake_summarizer.model_name = "llama3.2:3b"
+            fake_summarizer.summarize_transcript_streaming.return_value = iter([
+                '```json\n{"client": "ABC GmbH", "billable": true}\n```\n\n',
+                "## Zusammenfassung\nEs lief gut.\n",
+            ])
+
+            with mock.patch("src.config.get_config", return_value=cfg), \
+                 mock.patch("src.summarizer.OllamaSummarizer", return_value=fake_summarizer):
+                res = CliRunner().invoke(
+                    simple_recorder.generate_report, [str(summary), saved["id"]])
+            self.assertEqual(res.exit_code, 0, res.output)
+
+            content = json.loads(report_store.sidecar_path(summary).read_text())["reports"][0]
+            fm, body = report_store._split_frontmatter(content["content"])
+            self.assertEqual(fm["client"], "ABC GmbH")
+            self.assertIs(fm["billable"], True)
+            self.assertEqual(fm["inferred"], ["billable"])
+            self.assertEqual(fm["template_id"], saved["id"])
+            self.assertIn("Es lief gut.", body)
+            self.assertNotIn("```json", content["content"])
+            self.assertIn("raw_json", content)
+
+            # The generated json instruction reached the model on the FIRST pass,
+            # not only on a retry.
+            sent = fake_summarizer.summarize_transcript_streaming.call_args
+            self.assertIn("fields_instruction", sent.kwargs)
+            self.assertIn("client", sent.kwargs["fields_instruction"])
+            self.assertNotIn("```fields", sent.kwargs["template_prompt"])
+
 
 if __name__ == "__main__":
     unittest.main()
