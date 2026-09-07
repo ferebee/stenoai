@@ -168,9 +168,32 @@ function deriveFilename(dateStr, title, stem, isTaken) {
 // Build the vault-side note from a raw `<stem>_summary.md`. `resolveFolderName`
 // maps a folder id -> name (or null). Returns { vaultBody, title, dateStr,
 // folderName }.
-function transformNote(raw, { stem, resolveFolderName }) {
-  const { fm, body } = parseFrontmatter(raw);
-  const title = fm.title || stem;
+// Load the active template report for a note, if there is one. Reports live in
+// a `<stem>_reports.json` sidecar (src/report_store.py) because older notes may
+// be `_summary.json`; without this the vault only ever receives the Standard
+// summary and a user's chosen report stays on disk.
+function loadActiveReport(summaryPath) {
+  try {
+    const sidecar = summaryPath.replace(/_summary\.(md|json)$/, '_reports.json');
+    if (sidecar === summaryPath || !fs.existsSync(sidecar)) return null;
+    const data = JSON.parse(fs.readFileSync(sidecar, 'utf8'));
+    const reports = Array.isArray(data && data.reports) ? data.reports : [];
+    if (!reports.length) return null;
+    const active = reports.find((r) => r && r.id === data.active_report);
+    const chosen = active || reports[reports.length - 1];
+    return chosen && typeof chosen.content === 'string' && chosen.content.trim()
+      ? chosen.content : null;
+  } catch (_) { return null; }
+}
+
+function transformNote(raw, { stem, resolveFolderName, report = null }) {
+  const { fm, body: noteBody } = parseFrontmatter(raw);
+  // A report may carry its own front matter; its keys win, the note's fill the
+  // gaps. Without a report this is byte-identical to the previous behaviour.
+  const parsedReport = report ? parseFrontmatter(report) : null;
+  const reportFm = parsedReport ? parsedReport.fm : {};
+  const body = parsedReport ? parsedReport.body : noteBody;
+  const title = reportFm.title || fm.title || stem;
   // Only a well-formed YYYY-MM-DD becomes part of the filename — a hand-edited
   // date must never inject path separators / '..' into the vault path.
   const rawDate = fm.date ? String(fm.date).slice(0, 10) : '';
@@ -184,11 +207,40 @@ function transformNote(raw, { stem, resolveFolderName }) {
   const participants = sectionText(body, 'Participants')
     .split(',').map((p) => p.trim()).filter(Boolean);
 
+  // Steno's own keys first, then anything else — the note's remaining keys and
+  // the report's. `language` and `duration_seconds` were previously dropped on
+  // export despite being present and useful in a vault.
+  const emitted = new Set(['title', 'date', 'folder', 'folders', 'participants',
+    'source', 'steno_stem', 'configured_language', 'detected_language',
+    'is_diarised', 'notes_generated', 'notes_stale', 'is_live_transcript',
+    'processing', 'transcription_failed', 'reprocessable', 'audio_file',
+    'error', 'updated_at']);
   const props = [
     `title: ${yamlQuote(title)}`,
     dateStr ? `date: ${dateStr}` : null,
     folderName ? `folder: ${yamlQuote(folderName)}` : null,
   ].filter(Boolean);
+  for (const [k, raw] of Object.entries({ ...fm, ...reportFm })) {
+    if (emitted.has(k) || raw === null || raw === undefined || raw === '') continue;
+    emitted.add(k);
+    // The note reader returns scalars and one-line JSON arrays as strings;
+    // recover a real array so Obsidian types the property as a List.
+    let v = raw;
+    if (typeof v === 'string' && v.startsWith('[') && v.endsWith(']')) {
+      try { const a = JSON.parse(v); if (Array.isArray(a)) v = a; } catch (_) { /* keep string */ }
+    }
+    if (Array.isArray(v)) {
+      if (v.length) props.push(`${k}:\n` + v.map((x) => `  - ${yamlQuote(String(x))}`).join('\n'));
+    } else if (typeof v === 'number' || typeof v === 'boolean') {
+      props.push(`${k}: ${v}`);
+    } else if (/^-?\d+$/.test(String(v)) || String(v) === 'true' || String(v) === 'false') {
+      // The note reader hands back scalars as strings; emit them unquoted so
+      // Obsidian types them as Number / Checkbox rather than Text.
+      props.push(`${k}: ${v}`);
+    } else {
+      props.push(`${k}: ${yamlQuote(String(v))}`);
+    }
+  }
   const partBlock = participants.length
     ? 'participants:\n' + participants.map((p) => `  - ${yamlQuote(p)}`).join('\n')
     : null;
@@ -306,7 +358,8 @@ function registerObsidianSync({
       catch (_) { return { status: 'skipped' }; } // note gone → nothing to mirror
       const stem = stemFromSummaryPath(summaryPath);
       const { vaultBody, dateStr, title, folderName } =
-        transformNote(raw, { stem, resolveFolderName });
+        transformNote(raw, { stem, resolveFolderName,
+                             report: loadActiveReport(summaryPath) });
       const sub = folderName ? sanitizeFilename(folderName, folderName) : '';
       const entry = idx.notes[stem];
       const takenBy = (name) => {
