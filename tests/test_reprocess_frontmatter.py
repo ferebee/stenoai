@@ -133,3 +133,35 @@ class ReprocessFrontmatterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PreservedFrontmatterTests(unittest.TestCase):
+    """Keys this writer does not own must survive a rewrite — a user's own
+    Obsidian properties round-trip through this file."""
+
+    def test_unknown_keys_are_carried_forward(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "x_summary.md"
+            p.write_text('---\ntitle: "Old"\nproject: "ABC"\nbillable: true\n'
+                         '---\n\n## Summary\nbody\n', encoding="utf-8")
+            merged = simple_recorder._merge_preserved_frontmatter(p, {"title": "New"})
+            self.assertEqual(merged["title"], "New")      # owned key wins
+            self.assertEqual(merged["project"], "ABC")    # unknown key preserved
+            # Value type is the reader's business; preservation is this helper's.
+            self.assertIn("billable", merged)
+
+    def test_owned_keys_are_not_resurrected(self):
+        """A deliberately omitted owned key must stay omitted (#258)."""
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "x_summary.md"
+            p.write_text('---\ntitle: "Old"\nnotes_generated: false\n---\n\nbody\n',
+                         encoding="utf-8")
+            merged = simple_recorder._merge_preserved_frontmatter(p, {"title": "New"})
+            self.assertNotIn("notes_generated", merged)
+
+    def test_missing_file_is_a_noop(self):
+        with tempfile.TemporaryDirectory() as d:
+            meta = {"title": "New"}
+            self.assertEqual(
+                simple_recorder._merge_preserved_frontmatter(Path(d) / "nope.md", meta),
+                meta)
