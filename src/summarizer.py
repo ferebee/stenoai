@@ -130,6 +130,36 @@ def resolve_num_ctx(model_name: str) -> int:
     return max(OLLAMA_NUM_CTX_FLOOR, min(base, OLLAMA_NUM_CTX_CEILING))
 
 
+
+def build_fields_instruction(fields: list) -> str:
+    """The JSON half of a template prompt, generated from its declaration.
+
+    Generated rather than user-written so the declaration is the single source
+    of truth for the prompt, the validation and the inferred list.
+
+    NOTE: this asks for a fenced block inside a markdown reply, NOT a
+    response_format json_object — the reply has to carry prose as well, and
+    json_object would force the WHOLE response to be JSON. That is the cost of
+    doing this in one pass; a second call could enforce it.
+    """
+    if not fields:
+        return ""
+    width = max(len(f["name"]) for f in fields)
+    lines = []
+    for f in fields:
+        desc = f" {f['description']}" if f.get("description") else ""
+        lines.append(f"  {f['name']:<{width}}  ({f['type']}){desc}")
+    return (
+        "\n\nBegin the report with a fenced ```json block containing exactly "
+        "these keys, then the prose report below it:\n\n"
+        + "\n".join(lines)
+        + "\n\nUse null, or [] for a list, when something was not established — "
+        "never guess to fill a field. Dates are YYYY-MM-DD. A checkbox is true "
+        "or false. Emit the json block first, then the prose."
+    )
+
+
+
 class OllamaSummarizer:
     def __init__(self, model_name: Optional[str] = None, ai_provider: Optional[str] = None, config: Optional['Config'] = None):
         """
@@ -1416,7 +1446,8 @@ TRANSCRIPT:
 {transcript}"""
 
     def _create_template_report_prompt(self, transcript: str, template_prompt: str,
-                                       language: str = "en", notes: str = None) -> str:
+                                       language: str = "en", notes: str = None,
+                                       fields_instruction: str = "") -> str:
         """Free-form report prompt: the user's template instructions over the
         transcript. Unlike _create_markdown_prompt there is NO fixed section
         schema — the template decides the shape. Output is raw markdown."""
@@ -1436,7 +1467,8 @@ TRANSCRIPT:
         if "[You]" in transcript and "[Others]" in transcript:
             diarisation_note = "NOTE: [You] is the recorder, [Others] are remote participants.\n\n"
         return (
-            f"{diarisation_note}{notes_context}{template_prompt.strip()}\n\n"
+            f"{diarisation_note}{notes_context}{template_prompt.strip()}"
+            f"{fields_instruction}\n\n"
             "Base the report only on what was explicitly discussed; do not infer. "
             "Output the report as markdown with no preamble."
             f"{language_instruction}\n\nTRANSCRIPT:\n{transcript}"
@@ -1540,7 +1572,8 @@ TRANSCRIPT:
             logger.error(f"Ollama streaming failed: {e}")
             raise
 
-    def summarize_transcript_streaming(self, transcript: str, duration_minutes: int = 0, language: str = "en", notes: str = None, progress_callback=None, template_prompt: Optional[str] = None):
+    def summarize_transcript_streaming(self, transcript: str, duration_minutes: int = 0, language: str = "en", notes: str = None, progress_callback=None, template_prompt: Optional[str] = None,
+                                     fields_instruction: str = ""):
         """Generator that yields markdown chunks from the LLM.
 
         Args:
@@ -1563,7 +1596,8 @@ TRANSCRIPT:
             # summary-schema specific and don't apply here). Stream through the
             # ACTIVE provider — not straight to Ollama, which has no client and
             # would crash in cloud/adapter mode.
-            prompt = self._create_template_report_prompt(transcript, template_prompt, language, notes)
+            prompt = self._create_template_report_prompt(
+                transcript, template_prompt, language, notes, fields_instruction)
             inner = self._stream_completion(prompt)
             empty_message = "Model returned an empty report"
         elif self._needs_chunking(transcript, notes):

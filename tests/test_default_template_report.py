@@ -12,9 +12,11 @@ class _FakeSummarizer:
     def __init__(self, chunks):
         self._chunks = chunks
     def summarize_transcript_streaming(self, transcript, duration_minutes=0, language="en",
-                                       notes=None, progress_callback=None, template_prompt=None):
+                                       notes=None, progress_callback=None, template_prompt=None,
+                                       fields_instruction=""):
         # assert the template prompt is threaded through
         assert template_prompt, "expected a template prompt"
+        self.last_fields_instruction = fields_instruction
         for c in self._chunks:
             yield c
 
@@ -99,3 +101,106 @@ class DefaultTemplateReportTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+_FIELDS_PROMPT = """Write a support record.
+
+```fields
+client: text — person or company on the call
+systems_touched: list — systems involved
+billable: checkbox (inferred) — is this billable
+follow_up: date — only if a date was named
+```
+
+## Zusammenfassung
+Three sentences."""
+
+
+def _cfg_with_fields(tmp):
+    c = Config(config_path=Path(tmp) / "config.json")
+    ok, _, saved = c.save_template({"name": "Support", "prompt": _FIELDS_PROMPT,
+                                    "language": "auto"})
+    assert ok
+    c.set_default_template(saved["id"])
+    return c, saved["id"]
+
+
+class DeclaredFieldsTests(unittest.TestCase):
+    """A template's ```fields block becomes YAML front matter on its report."""
+
+    def _run(self, tmp, model_output):
+        c, tid = _cfg_with_fields(tmp)
+        mp = Path(tmp) / "m_summary.md"
+        mp.write_text("---\n---\n\n## Summary\nx\n", encoding="utf-8")
+        out = simple_recorder.generate_default_template_report(
+            mp, "T: hi", None, "en", 1, c, _FakeSummarizer([model_output]))
+        return out, tid, report_store.load_sidecar(mp)
+
+    def test_json_block_becomes_yaml_frontmatter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out, tid, sc = self._run(tmp,
+                '```json\n{"client": "Erika Mustermann", '
+                '"systems_touched": ["Synology", "Time Machine"], '
+                '"billable": true, "follow_up": "2026-09-15"}\n```\n\n'
+                '## Zusammenfassung\nEs ging um den Zugriff.\n')
+            content = sc["reports"][0]["content"]
+            self.assertTrue(content.startswith("---\n"))
+            fm, body = report_store._split_frontmatter(content)
+            self.assertEqual(fm["client"], "Erika Mustermann")
+            self.assertEqual(fm["systems_touched"], ["Synology", "Time Machine"])
+            self.assertIs(fm["billable"], True)
+            self.assertEqual(fm["follow_up"], "2026-09-15")
+            self.assertEqual(fm["inferred"], ["billable"])   # declared (inferred)
+            self.assertEqual(fm["template_id"], tid)
+            self.assertIn("Es ging um den Zugriff.", body)
+            self.assertNotIn("```json", content)             # block consumed
+            self.assertIn("raw_json", sc["reports"][0])      # kept beside, not inside
+
+    def test_colon_in_a_value_is_quoted_not_broken(self):
+        """The failure that motivated JSON-on-the-wire: a model writing this as
+        YAML produces a ScannerError; PyYAML quotes it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            _, _, sc = self._run(tmp,
+                '```json\n{"client": "Erika Mustermann: Synology-Zugriff"}\n```\n\nprose\n')
+            fm, _ = report_store._split_frontmatter(sc["reports"][0]["content"])
+            self.assertEqual(fm["client"], "Erika Mustermann: Synology-Zugriff")
+
+    def test_wrong_type_is_nulled_not_passed_through(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, _, sc = self._run(tmp,
+                '```json\n{"follow_up": "nächste Woche", "billable": "vielleicht"}\n```\n\nprose\n')
+            fm, _ = report_store._split_frontmatter(sc["reports"][0]["content"])
+            self.assertIsNone(fm["follow_up"])
+            self.assertIsNone(fm["billable"])
+
+    def test_unknown_keys_dropped_and_missing_keys_nulled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, _, sc = self._run(tmp,
+                '```json\n{"client": "X", "invented": "y"}\n```\n\nprose\n')
+            fm, _ = report_store._split_frontmatter(sc["reports"][0]["content"])
+            self.assertNotIn("invented", fm)
+            self.assertIsNone(fm["systems_touched"])
+
+    def test_no_json_block_retries_then_degrades_to_prose(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            c, tid = _cfg_with_fields(tmp)
+            mp = Path(tmp) / "m_summary.md"
+            mp.write_text("---\n---\n\n## Summary\nx\n", encoding="utf-8")
+            fake = _FakeSummarizer(["## Report\nno json here"])
+            out = simple_recorder.generate_default_template_report(
+                mp, "T: hi", None, "en", 1, c, fake)
+            self.assertIsNotNone(out)          # never lose the report
+            sc = report_store.load_sidecar(mp)
+            content = sc["reports"][0]["content"]
+            self.assertFalse(content.startswith("---"))   # prose only
+            self.assertIn("no json here", content)
+
+    def test_template_without_fields_is_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            c, _ = _cfg(tmp, "custom")     # plain prompt, no fields block
+            mp = Path(tmp) / "m_summary.md"
+            mp.write_text("---\n---\n\n## Summary\nx\n", encoding="utf-8")
+            simple_recorder.generate_default_template_report(
+                mp, "T: hi", None, "en", 1, c, _FakeSummarizer(["## Report\n- ok"]))
+            content = report_store.load_sidecar(mp)["reports"][0]["content"]
+            self.assertEqual(content, "## Report\n- ok")

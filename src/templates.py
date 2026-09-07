@@ -17,6 +17,8 @@ This module is pure — no I/O — so it is unit-testable without a running app.
 
 import re
 
+import yaml
+
 STANDARD_TEMPLATE_ID = "standard"
 
 MAX_NAME_LEN = 200
@@ -119,6 +121,101 @@ SAMPLE_TEMPLATE = {
     "language": "auto",
     "format": "markdown",
 }
+
+
+# ── Declared fields ──────────────────────────────────────────────────────
+# A template may declare structured fields in a fenced block inside its prompt,
+# so no new UI surface is needed:
+#
+#   ```fields
+#   client: text — person or company on the call
+#   systems_touched: list — systems, hosts or services involved
+#   billable: checkbox (inferred) — whether this call is billable work
+#   ```
+#
+# `name: type` is already valid YAML, so the block parses with the same loader
+# the front matter uses. The type is the first whitespace token, `(inferred)`
+# marks a judgment rather than something stated, and the text after the dash is
+# the description — which reaches the model, so it must live here rather than in
+# the prose. NOTE: `#` cannot introduce the description; YAML would strip it as
+# a comment and the text would be silently lost.
+FIELDS_BLOCK_RE = re.compile(r"```fields[ \t]*\n(.*?)```", re.S)
+
+# Restricted to what Obsidian Properties supports, which also rules out the
+# nested shapes Obsidian will not display ("to view nested properties, we
+# recommend using the source mode").
+FIELD_TYPES = frozenset({"text", "list", "number", "checkbox", "date", "datetime"})
+
+FIELD_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+MAX_FIELDS = 30
+MAX_FIELD_DESC_LEN = 300
+
+# Front matter keys Steno owns. A template declaring one of these could break
+# the UI (title, processing) or corrupt provenance (detected_language).
+RESERVED_FIELD_NAMES = frozenset({
+    "title", "date", "duration_seconds", "language", "configured_language",
+    "detected_language", "is_diarised", "folders", "transcription_failed",
+    "reprocessable", "audio_file", "error", "notes_generated", "notes_stale",
+    "is_live_transcript", "processing", "updated_at", "source", "steno_stem",
+})
+
+_DESC_SPLIT_RE = re.compile(r"\s+(?:—|--)\s+")
+
+
+def parse_fields_block(prompt: str):
+    """Split a prompt into (fields, prose).
+
+    `fields` is a list of {name, type, basis, description}; empty when the
+    prompt declares none, which is the common case and means the template
+    behaves exactly as it always has. Never raises — a malformed block yields
+    no fields, and validate_fields() is what reports why.
+    """
+    if not isinstance(prompt, str):
+        return [], ""
+    m = FIELDS_BLOCK_RE.search(prompt)
+    if not m:
+        return [], prompt
+    prose = (prompt[:m.start()] + prompt[m.end():]).strip()
+    try:
+        loaded = yaml.safe_load(m.group(1))
+    except yaml.YAMLError:
+        return [], prose
+    if not isinstance(loaded, dict):
+        return [], prose
+    fields = []
+    for name, decl in loaded.items():
+        decl = "" if decl is None else str(decl)
+        basis = "inferred" if "(inferred)" in decl else "stated"
+        head, _, tail = decl.partition(" ")
+        parts = _DESC_SPLIT_RE.split(decl, maxsplit=1)
+        description = parts[1].strip() if len(parts) > 1 else ""
+        fields.append({
+            "name": str(name).strip(),
+            "type": head.strip().lower(),
+            "basis": basis,
+            "description": description[:MAX_FIELD_DESC_LEN],
+        })
+    return fields, prose
+
+
+def validate_fields(fields: list) -> tuple:
+    """Return (ok, error_message) for a parsed field list."""
+    if len(fields) > MAX_FIELDS:
+        return False, f"Too many declared fields (max {MAX_FIELDS})"
+    seen = set()
+    for f in fields:
+        name = f.get("name", "")
+        if not FIELD_NAME_RE.match(name):
+            return False, f"Invalid field name: {name!r} (use lower_snake_case)"
+        if name in RESERVED_FIELD_NAMES:
+            return False, f"'{name}' is reserved by Steno and cannot be a template field"
+        if name in seen:
+            return False, f"Duplicate field: {name}"
+        seen.add(name)
+        if f.get("type") not in FIELD_TYPES:
+            return False, (f"Unsupported type for {name}: {f.get('type')!r} "
+                           f"(one of {', '.join(sorted(FIELD_TYPES))})")
+    return True, ""
 
 
 def new_template_id(name: str, existing_ids: set) -> str:

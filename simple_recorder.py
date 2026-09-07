@@ -23,6 +23,8 @@ import logging
 import json
 import os
 import re
+
+import yaml
 import sys
 import time
 from datetime import datetime
@@ -1006,6 +1008,109 @@ Summary output language: {config.get_language_name(output_language)}
         }
 
 
+
+# ── Declared-field extraction ────────────────────────────────────────────
+_JSON_BLOCK_RE = re.compile(r"```json[ \t]*\n(.*?)```", re.S)
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _split_json_block(text: str):
+    """Return (data_or_None, prose). Removes the block from the prose."""
+    m = _JSON_BLOCK_RE.search(text or "")
+    if not m:
+        return None, (text or "").strip()
+    prose = ((text[:m.start()] + text[m.end():]) or "").strip()
+    try:
+        data = json.loads(m.group(1))
+    except (ValueError, TypeError):
+        return None, prose
+    return (data if isinstance(data, dict) else None), prose
+
+
+def _coerce_field(value, ftype: str):
+    """Coerce to the declared type. Returns (value, ok).
+
+    A mismatch nulls the field and is reported, rather than letting prose into a
+    Date property: the CRM has to be able to trust the type. The prose section
+    still carries whatever the model actually said.
+    """
+    if value is None or value == "":
+        return None, True
+    if ftype == "list":
+        if isinstance(value, list):
+            return [str(v).strip() for v in value if str(v).strip()], True
+        return None, False
+    if ftype == "checkbox":
+        if isinstance(value, bool):
+            return value, True
+        if str(value).strip().lower() in ("true", "false"):
+            return str(value).strip().lower() == "true", True
+        return None, False
+    if ftype == "number":
+        if isinstance(value, bool):
+            return None, False
+        if isinstance(value, (int, float)):
+            return value, True
+        try:
+            return int(str(value).strip()), True
+        except ValueError:
+            return None, False
+    if ftype in ("date", "datetime"):
+        v = str(value).strip()
+        if ftype == "date" and _ISO_DATE_RE.match(v):
+            return v, True
+        if ftype == "datetime" and len(v) >= 10 and _ISO_DATE_RE.match(v[:10]):
+            return v, True
+        return None, False
+    return str(value).strip(), True
+
+
+def _build_field_frontmatter(data: dict, fields: list, template_id: str):
+    """Validate + coerce the model's JSON against the declaration.
+
+    Returns (ordered_dict, [problems]). Keys follow declaration order so the
+    vault sees a stable shape; unknown keys are dropped, missing ones are null.
+    """
+    out, problems, inferred = {}, [], []
+    for f in fields:
+        name, ftype = f["name"], f["type"]
+        raw = data.get(name)
+        if name not in data:
+            problems.append(f"missing key {name!r}")
+        coerced, ok = _coerce_field(raw, ftype)
+        if not ok:
+            problems.append(f"{name}: expected {ftype}, got {raw!r} -> null")
+        out[name] = coerced
+        if f.get("basis") == "inferred" and coerced not in (None, [], False):
+            inferred.append(name)
+    for k in data:
+        if k not in out:
+            problems.append(f"unknown key {k!r} dropped")
+    if inferred:
+        out["inferred"] = inferred
+    out["template_id"] = template_id
+    return out, problems
+
+
+def _render_report_with_frontmatter(fm: dict, prose: str) -> str:
+    """A report is a complete markdown document: YAML front matter, then prose.
+
+    Serialised by PyYAML rather than by the model, so a value like
+    'Erika Mustermann: Synology-Zugriff' is quoted correctly by construction --
+    that colon is a YAML ScannerError when a model writes it unquoted.
+    """
+    block = yaml.safe_dump(fm, allow_unicode=True, sort_keys=False,
+                           default_flow_style=False, width=10 ** 6).strip()
+    return f"---\n{block}\n---\n\n{prose}".strip() + "\n"
+
+
+def _summarizer_fields_instruction(fields: list) -> str:
+    if not fields:
+        return ""
+    from src.summarizer import build_fields_instruction
+    return build_fields_instruction(fields)
+
+
 def generate_default_template_report(summary_path, transcript, notes, language,
                                      duration_minutes, config, summarizer):
     """Best-effort: if the configured default template is not 'standard', generate
@@ -1026,21 +1131,67 @@ def generate_default_template_report(summary_path, transcript, notes, language,
         # inactivity watchdog would otherwise fire on a slow model and FAIL the
         # recording AFTER the Standard note was already saved. Heartbeat keeps it
         # alive; a distinct label avoids polluting the parsed summary stream.
-        heartbeat = _start_summary_heartbeat(label="default-report")
-        try:
-            chunks = []
-            for chunk in summarizer.summarize_transcript_streaming(
-                transcript, duration_minutes, report_language, notes,
-                template_prompt=tmpl["prompt"],
-            ):
-                chunks.append(chunk)
-        finally:
-            heartbeat.set()
-        content = "".join(chunks).strip()
+        # A template may declare structured fields in its prompt; the prose half
+        # is what remains once that block is removed.
+        from src.templates import parse_fields_block, validate_fields
+        fields, prose_prompt = parse_fields_block(tmpl["prompt"])
+        if fields:
+            ok, err = validate_fields(fields)
+            if not ok:
+                logger.warning(f"[template-data] {tid}: invalid field declaration ({err}); "
+                               f"generating prose only")
+                fields = []
+        fields_instruction = _summarizer_fields_instruction(fields)
+
+        def _run():
+            heartbeat = _start_summary_heartbeat(label="default-report")
+            try:
+                chunks = []
+                # Only pass fields_instruction when there is one, so a template
+                # without declared fields calls exactly the signature it always
+                # did.
+                kwargs = {"template_prompt": prose_prompt if fields else tmpl["prompt"]}
+                if fields_instruction:
+                    kwargs["fields_instruction"] = fields_instruction
+                for chunk in summarizer.summarize_transcript_streaming(
+                    transcript, duration_minutes, report_language, notes, **kwargs
+                ):
+                    chunks.append(chunk)
+            finally:
+                heartbeat.set()
+            return "".join(chunks).strip()
+
+        content = _run()
         if not content:
             return None
+
+        raw_json = None
+        if fields:
+            data, prose = _split_json_block(content)
+            if data is None:
+                # OPEN (see TEMPLATE-DATA-DESIGN.md): one retry, deliberately
+                # loud. A retry is a full second pass over the transcript, so
+                # this needs to stay visible until we know how often it fires.
+                logger.warning(f"[template-data] RETRY: no valid json block from {tid} "
+                               f"— regenerating (this costs a second pass over the transcript)")
+                print(f"TEMPLATE_DATA_RETRY:{tid}", flush=True)
+                content = _run()
+                data, prose = _split_json_block(content) if content else (None, "")
+            if data is None:
+                logger.warning(f"[template-data] {tid}: no valid json after retry; "
+                               f"keeping prose only")
+                print(f"TEMPLATE_DATA_FAILED:{tid}", flush=True)
+            else:
+                fm, problems = _build_field_frontmatter(data, fields, tid)
+                for prob in problems:
+                    logger.warning(f"[template-data] {tid}: {prob}")
+                raw_json = json.dumps(data, ensure_ascii=False)
+                content = _render_report_with_frontmatter(fm, prose)
         sidecar = _store.load_sidecar(summary_path)
         report = _reports.make_report(tid, tmpl["name"], summarizer.model_name, content)
+        if raw_json is not None:
+            # Kept for debugging a field that came out wrong; never in `content`.
+            report["raw_json"] = raw_json
         _reports.append_report(sidecar, report)
         _store.save_sidecar(summary_path, sidecar)
         return report
