@@ -165,21 +165,34 @@ class DeclaredFieldsTests(unittest.TestCase):
             fm, _ = report_store._split_frontmatter(sc["reports"][0]["content"])
             self.assertEqual(fm["client"], "Erika Mustermann: Synology-Zugriff")
 
-    def test_wrong_type_is_nulled_not_passed_through(self):
+    def test_wrong_type_is_omitted_not_passed_through(self):
+        """A mismatch must never put prose into a Date property. The field is
+        dropped rather than emitted as null — Obsidian treats missing and null
+        the same, and a null clutters the Properties panel."""
         with tempfile.TemporaryDirectory() as tmp:
             _, _, sc = self._run(tmp,
                 '```json\n{"follow_up": "nächste Woche", "billable": "vielleicht"}\n```\n\nprose\n')
             fm, _ = report_store._split_frontmatter(sc["reports"][0]["content"])
-            self.assertIsNone(fm["follow_up"])
-            self.assertIsNone(fm["billable"])
+            self.assertNotIn("follow_up", fm)
+            self.assertNotIn("billable", fm)
 
-    def test_unknown_keys_dropped_and_missing_keys_nulled(self):
+    def test_unknown_keys_dropped_and_unestablished_fields_omitted(self):
         with tempfile.TemporaryDirectory() as tmp:
             _, _, sc = self._run(tmp,
                 '```json\n{"client": "X", "invented": "y"}\n```\n\nprose\n')
             fm, _ = report_store._split_frontmatter(sc["reports"][0]["content"])
-            self.assertNotIn("invented", fm)
-            self.assertIsNone(fm["systems_touched"])
+            self.assertNotIn("invented", fm)      # not declared
+            self.assertNotIn("systems_touched", fm)  # declared but not established
+            self.assertEqual(fm["client"], "X")
+
+    def test_false_is_a_real_answer_and_survives(self):
+        """`false` is an answer, not an absence — unlike null or []."""
+        with tempfile.TemporaryDirectory() as tmp:
+            _, _, sc = self._run(tmp,
+                '```json\n{"billable": false, "systems_touched": []}\n```\n\nprose\n')
+            fm, _ = report_store._split_frontmatter(sc["reports"][0]["content"])
+            self.assertIs(fm["billable"], False)
+            self.assertNotIn("systems_touched", fm)
 
     def test_no_json_block_retries_then_degrades_to_prose(self):
         with tempfile.TemporaryDirectory() as tmp:

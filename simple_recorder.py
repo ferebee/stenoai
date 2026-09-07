@@ -1092,8 +1092,10 @@ def _build_field_frontmatter(data: dict, fields: list, template_id: str,
     """Validate + coerce the model's JSON against the declaration.
 
     Returns (ordered_dict, [problems]). Note metadata comes first, then the
-    declared fields in declaration order so the vault sees a stable shape;
-    unknown keys are dropped, missing ones are null.
+    declared fields in declaration order so the vault sees a stable shape.
+    Unknown keys are dropped; fields with nothing established are OMITTED
+    rather than emitted as null, so the front matter carries only what the
+    call actually produced.
     """
     out, problems, inferred = dict(note_meta or {}), [], []
     for f in fields:
@@ -1104,8 +1106,13 @@ def _build_field_frontmatter(data: dict, fields: list, template_id: str,
         coerced, ok = _coerce_field(raw, ftype)
         if not ok:
             problems.append(f"{name}: expected {ftype}, got {raw!r} -> null")
+        # Omit what was not established. Obsidian treats a missing property and
+        # a null one identically for filtering and Bases, so a null buys nothing
+        # and clutters the Properties panel; `false` is a real answer and stays.
+        if coerced is None or coerced == []:
+            continue
         out[name] = coerced
-        if f.get("basis") == "inferred" and coerced not in (None, [], False):
+        if f.get("basis") == "inferred":
             inferred.append(name)
     # Checked against the DECLARED names, not `out` — `out` is pre-seeded with
     # note metadata, so a model inventing e.g. `language` would otherwise slip
