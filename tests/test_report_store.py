@@ -163,3 +163,31 @@ class ReadMeetingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FrontmatterParsingTests(unittest.TestCase):
+    """The front matter parser must agree with its JavaScript twin
+    (main.js parseMeetingMarkdown) on types and on escaped quotes."""
+
+    def test_escaped_quotes_survive(self):
+        text = '---\ntitle: "Er sagte \\"geht nicht\\""\n---\n\nbody\n'
+        fm, _ = S._split_frontmatter(text)
+        self.assertEqual(fm["title"], 'Er sagte "geht nicht"')
+
+    def test_scalars_keep_their_types(self):
+        text = ('---\nduration_seconds: 103\nis_diarised: true\n'
+                'folders: ["fold_abc"]\ndetected_language: null\n---\n\nbody\n')
+        fm, _ = S._split_frontmatter(text)
+        self.assertEqual(fm["duration_seconds"], 103)
+        self.assertIs(fm["is_diarised"], True)
+        self.assertEqual(fm["folders"], ["fold_abc"])
+        self.assertIsNone(fm["detected_language"])
+
+    def test_empty_value_is_none(self):
+        fm, _ = S._split_frontmatter('---\ndetected_language:\n---\n\nbody\n')
+        self.assertIsNone(fm["detected_language"])
+
+    def test_malformed_yaml_yields_empty_frontmatter_not_an_error(self):
+        fm, body = S._split_frontmatter('---\na: [unclosed\n---\n\nbody\n')
+        self.assertEqual(fm, {})
+        self.assertEqual(body, "body\n")

@@ -60,3 +60,6 @@ anthropic>=0.18.0
 # PINNED to an exact version — this ships inside the signed/notarised binary, and
 # its dictionary JSON is bundled via collect_data_files('opencc') in stenoai.spec.
 opencc-python-reimplemented==0.1.7
+
+# Frontmatter parsing (report_store) — previously transitive.
+PyYAML>=6.0

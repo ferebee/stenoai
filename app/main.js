@@ -58,6 +58,7 @@ const { registerFoldersIpc } = require('./folders-ipc');
 const { registerSettingsIpc } = require('./settings-ipc');
 const { registerPersonSampleIpc } = require('./person-sample-ipc');
 const { registerSpeakerIpc } = require('./speaker-ipc');
+const yaml = require('js-yaml');
 const { registerObsidianSync } = require('./obsidian-sync');
 const { registerObsidianIpc } = require('./obsidian-ipc');
 const { isSafeToAutoInstall } = require('./update-idle-gate');
@@ -2710,7 +2711,11 @@ function normalizeMarkdownForParsing(mdText) {
 // meeting dict — they drift silently otherwise (see #346, and #313 for a prior
 // drift). Any change here has to land in _parse_meeting_markdown too.
 function parseMeetingMarkdown(content, mdPath) {
-  // Split frontmatter
+  // Split frontmatter. Parsed with a real YAML loader rather than by hand —
+  // the writer has always emitted valid YAML, so every existing note reads
+  // unchanged, and the Python twin (report_store._split_frontmatter) now uses
+  // the same loader instead of a second hand-rolled parser that disagreed with
+  // this one on escaped quotes and on int/bool/list types.
   const meta = {};
   let body = content;
   if (content.startsWith('---')) {
@@ -2718,31 +2723,17 @@ function parseMeetingMarkdown(content, mdPath) {
     // content.split('---', 2) in Python keeps the remainder; replicate by
     // re-joining everything after the second delimiter.
     if (parts.length >= 3) {
-      const fmText = parts[1].trim();
+      const fmText = parts[1];
       body = parts.slice(2).join('---').trim();
-      for (const line of fmText.split('\n')) {
-        const colon = line.indexOf(':');
-        if (colon === -1) continue;
-        const key = line.slice(0, colon).trim();
-        let value = line.slice(colon + 1).trim();
-        if (value.startsWith('"') && value.endsWith('"')) {
-          value = value.slice(1, -1).replace(/\\(.)/g, '$1');
-        } else if (value.startsWith('[')) {
-          try {
-            value = JSON.parse(value);
-          } catch (_) {
-            value = [];
-          }
-        } else if (value === 'null') {
-          value = null;
-        } else if (value === 'true') {
-          value = true;
-        } else if (value === 'false') {
-          value = false;
-        } else if (/^-?\d+$/.test(value)) {
-          value = parseInt(value, 10);
+      let loaded = null;
+      try { loaded = yaml.load(fmText); } catch (_) { loaded = null; }
+      if (loaded && typeof loaded === 'object' && !Array.isArray(loaded)) {
+        for (const [key, raw] of Object.entries(loaded)) {
+          // Empty string -> null (#283), and a bare (unquoted) date would load
+          // as a Date; keep it a string so consumers see what was written.
+          meta[key] = raw === '' ? null
+            : (raw instanceof Date ? raw.toISOString() : raw);
         }
-        meta[key] = value;
       }
     }
   }
