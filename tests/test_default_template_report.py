@@ -204,3 +204,68 @@ class DeclaredFieldsTests(unittest.TestCase):
                 mp, "T: hi", None, "en", 1, c, _FakeSummarizer(["## Report\n- ok"]))
             content = report_store.load_sidecar(mp)["reports"][0]["content"]
             self.assertEqual(content, "## Report\n- ok")
+
+
+class ReportCompletenessTests(unittest.TestCase):
+    """A report must be a COMPLETE markdown document: note metadata plus the
+    declared fields, so nothing has to be reassembled at export."""
+
+    def _run(self, tmp, model_output, note_title="Note"):
+        # This template declares a title of its own, which the others do not.
+        c = Config(config_path=Path(tmp) / "config.json")
+        ok, _, saved = c.save_template({
+            "name": "Titled", "language": "auto",
+            "prompt": "Write a record.\n\n```fields\n"
+                      "title: text — short title, prefixed with the client\n"
+                      "client: text — who was on the call\n"
+                      "```\n\n## Zusammenfassung\nShort.",
+        })
+        assert ok
+        c.set_default_template(saved["id"])
+        tid = saved["id"]
+        mp = Path(tmp) / "m_summary.md"
+        mp.write_text(
+            f'---\ntitle: "{note_title}"\ndate: "2026-09-06T11:54:16"\n'
+            'duration_seconds: 587\nlanguage: "de"\n'
+            'configured_language: "auto"\nis_diarised: true\nfolders: []\n'
+            '---\n\n## Summary\nx\n', encoding="utf-8")
+        simple_recorder.generate_default_template_report(
+            mp, "T: hi", None, "de", 9, c, _FakeSummarizer([model_output]))
+        return mp, tid, report_store.load_sidecar(mp)
+
+    def test_report_carries_note_metadata_but_not_internal_provenance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, tid, sc = self._run(tmp, '```json\n{"client": "ABC"}\n```\n\nprose\n')
+            fm, _ = report_store._split_frontmatter(sc["reports"][0]["content"])
+            self.assertEqual(fm["date"], "2026-09-06T11:54:16")
+            self.assertEqual(fm["duration_seconds"], 587)
+            self.assertEqual(fm["language"], "de")
+            for internal in ("configured_language", "is_diarised", "folders"):
+                self.assertNotIn(internal, fm)
+            # note metadata precedes the declared fields
+            keys = list(fm)
+            self.assertLess(keys.index("date"), keys.index("client"))
+
+    def test_declared_title_names_an_unnamed_meeting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mp, _, sc = self._run(
+                tmp, '```json\n{"title": "ABC GmbH: Exchange"}\n```\n\nprose\n',
+                note_title="Note")
+            note_fm, _ = report_store._split_frontmatter(mp.read_text(encoding="utf-8"))
+            self.assertEqual(note_fm["title"], "ABC GmbH: Exchange")
+
+    def test_declared_title_never_overwrites_a_chosen_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mp, _, _ = self._run(
+                tmp, '```json\n{"title": "ABC GmbH: Exchange"}\n```\n\nprose\n',
+                note_title="Erika Mustermann wg. Scanner")
+            note_fm, _ = report_store._split_frontmatter(mp.read_text(encoding="utf-8"))
+            self.assertEqual(note_fm["title"], "Erika Mustermann wg. Scanner")
+
+    def test_auto_detect_placeholder_is_also_replaced(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mp, _, _ = self._run(
+                tmp, '```json\n{"title": "ABC GmbH: Exchange"}\n```\n\nprose\n',
+                note_title="Call — 2026-09-06 11:54")
+            note_fm, _ = report_store._split_frontmatter(mp.read_text(encoding="utf-8"))
+            self.assertEqual(note_fm["title"], "ABC GmbH: Exchange")

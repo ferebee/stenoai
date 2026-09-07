@@ -294,7 +294,10 @@ test('transformNote uses the active report body and merges its frontmatter', () 
     + '## Zusammenfassung\nreport body\n';
   const { vaultBody, title } = transformNote(note,
     { stem: 'x', resolveFolderName: () => null, report });
-  assert.equal(title, 'Report title');                    // report wins
+  // The NOTE's title wins: a template's title is written back to the note when
+  // the meeting is still unnamed, so they normally agree — but a rename in
+  // Steno must reach the vault rather than being masked by a frozen report.
+  assert.equal(title, 'Note title');
   assert.match(vaultBody, /language: "de"/);              // note fills the gap
   assert.match(vaultBody, /client: "Erika Mustermann"/);
   assert.match(vaultBody, /systems_touched:\n  - "Synology"\n  - "Time Machine"/);

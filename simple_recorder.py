@@ -1065,13 +1065,37 @@ def _coerce_field(value, ftype: str):
     return str(value).strip(), True
 
 
-def _build_field_frontmatter(data: dict, fields: list, template_id: str):
+# Note metadata carried into a report's front matter so the report is a
+# COMPLETE markdown document -- the same YAML in Steno, in the sidecar blob, and
+# in the vault, with nothing reassembled at export. Deliberately excludes
+# Steno-internal provenance (configured_language, detected_language,
+# is_diarised, folders), which is of no use to a CRM.
+_REPORT_NOTE_KEYS = ("date", "duration_seconds", "language")
+
+
+def _note_meta_for_report(summary_path) -> dict:
+    """The note metadata a report should carry. Empty when unreadable."""
+    try:
+        text = Path(summary_path).read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    try:
+        from src.report_store import _split_frontmatter
+        fm, _ = _split_frontmatter(text)
+    except Exception:
+        return {}
+    return {k: fm[k] for k in _REPORT_NOTE_KEYS if fm.get(k) is not None}
+
+
+def _build_field_frontmatter(data: dict, fields: list, template_id: str,
+                             note_meta: dict = None):
     """Validate + coerce the model's JSON against the declaration.
 
-    Returns (ordered_dict, [problems]). Keys follow declaration order so the
-    vault sees a stable shape; unknown keys are dropped, missing ones are null.
+    Returns (ordered_dict, [problems]). Note metadata comes first, then the
+    declared fields in declaration order so the vault sees a stable shape;
+    unknown keys are dropped, missing ones are null.
     """
-    out, problems, inferred = {}, [], []
+    out, problems, inferred = dict(note_meta or {}), [], []
     for f in fields:
         name, ftype = f["name"], f["type"]
         raw = data.get(name)
@@ -1083,13 +1107,52 @@ def _build_field_frontmatter(data: dict, fields: list, template_id: str):
         out[name] = coerced
         if f.get("basis") == "inferred" and coerced not in (None, [], False):
             inferred.append(name)
+    # Checked against the DECLARED names, not `out` — `out` is pre-seeded with
+    # note metadata, so a model inventing e.g. `language` would otherwise slip
+    # past unreported.
+    declared = {f["name"] for f in fields}
     for k in data:
-        if k not in out:
+        if k not in declared:
             problems.append(f"unknown key {k!r} dropped")
     if inferred:
         out["inferred"] = inferred
     out["template_id"] = template_id
     return out, problems
+
+
+def _maybe_apply_report_title(summary_path, fm: dict) -> bool:
+    """Let a template's declared `title` name the meeting, when it is unnamed.
+
+    Gated on _AUTO_NAMED_PATTERN, exactly like the post-summary title step: a
+    placeholder ("Note", "Meeting", "<App> — 2026-09-07 14:30") is replaced, a
+    name the user chose is never touched. A template's title has context the
+    generic title generator lacks -- it knows the client -- and this costs no
+    extra model call.
+
+    Patches only the title line, leaving the rest of the note untouched.
+    """
+    title = (fm or {}).get("title")
+    if not title or not str(title).strip():
+        return False
+    try:
+        path = Path(summary_path)
+        text = path.read_text(encoding="utf-8")
+        from src.report_store import _split_frontmatter
+        existing, _ = _split_frontmatter(text)
+        current = existing.get("title") or ""
+        if current and not _AUTO_NAMED_PATTERN.match(str(current)):
+            return False          # a name the user chose -- leave it alone
+        escaped = str(title).replace("\\", "\\\\").replace('"', '\\"')
+        patched = re.sub(r'^title:.*$', f'title: "{escaped}"', text,
+                         count=1, flags=re.MULTILINE)
+        if patched == text:
+            return False
+        _atomic_write_text(path, patched)
+        print(f"TITLE:{title}", flush=True)
+        return True
+    except Exception as e:
+        logger.warning(f"[template-data] could not apply report title: {e}")
+        return False
 
 
 def _render_report_with_frontmatter(fm: dict, prose: str) -> str:
@@ -1130,12 +1193,17 @@ def declared_fields_for(prompt: str, template_id: str):
     return fields, prose, _summarizer_fields_instruction(fields)
 
 
-def apply_declared_fields(content: str, fields: list, template_id: str, regenerate=None):
+def apply_declared_fields(content: str, fields: list, template_id: str,
+                          regenerate=None, summary_path=None):
     """Turn a template's raw output into a report with YAML front matter.
 
     Shared by every path that produces a template report — the recording
     pipeline and the standalone `generate-report` command — so extraction can
     never be wired into one of them and be silently missing from the others.
+
+    The result is a COMPLETE markdown document: the note's date/duration/language
+    followed by the declared fields, so the same YAML travels from the sidecar
+    blob to a vault note with nothing reassembled at export.
 
     Returns (content, raw_json). With no declared fields, or when the model's
     json cannot be parsed even after a retry, `content` comes back unchanged
@@ -1161,7 +1229,10 @@ def apply_declared_fields(content: str, fields: list, template_id: str, regenera
         print(f"TEMPLATE_DATA_FAILED:{template_id}", flush=True)
         return content, None
 
-    fm, problems = _build_field_frontmatter(data, fields, template_id)
+    note_meta = _note_meta_for_report(summary_path) if summary_path else {}
+    fm, problems = _build_field_frontmatter(data, fields, template_id, note_meta)
+    if summary_path:
+        _maybe_apply_report_title(summary_path, fm)
     for prob in problems:
         logger.warning(f"[template-data] {template_id}: {prob}")
     return _render_report_with_frontmatter(fm, prose), json.dumps(data, ensure_ascii=False)
@@ -1213,7 +1284,8 @@ def generate_default_template_report(summary_path, transcript, notes, language,
         if not content:
             return None
 
-        content, raw_json = apply_declared_fields(content, fields, tid, regenerate=_run)
+        content, raw_json = apply_declared_fields(
+            content, fields, tid, regenerate=_run, summary_path=summary_path)
 
         sidecar = _store.load_sidecar(summary_path)
         report = _reports.make_report(tid, tmpl["name"], summarizer.model_name, content)
@@ -4116,6 +4188,7 @@ def generate_report(summary_file, template_id):
     streamed_md, raw_json = apply_declared_fields(
         streamed_md, _fields, template_id,
         regenerate=lambda: "".join(_stream_report()).strip(),
+        summary_path=summary_path,
     )
 
     # Write the sidecar BEFORE emitting STREAM_COMPLETE so the renderer's

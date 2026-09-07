@@ -197,7 +197,11 @@ function transformNote(raw, { stem, resolveFolderName, report = null }) {
   const parsedReport = report ? parseFrontmatter(report) : null;
   const reportFm = parsedReport ? parsedReport.fm : {};
   const body = parsedReport ? parsedReport.body : noteBody;
-  const title = reportFm.title || fm.title || stem;
+  // The NOTE's title wins over the report's. A template that declares a title
+  // already wrote it back to the note when the meeting was unnamed, so the two
+  // normally agree — but the note is the one the user can rename, and a rename
+  // has to reach the vault rather than being masked by a frozen report.
+  const title = fm.title || reportFm.title || stem;
   // Only a well-formed YYYY-MM-DD becomes part of the filename — a hand-edited
   // date must never inject path separators / '..' into the vault path.
   const rawDate = fm.date ? String(fm.date).slice(0, 10) : '';
