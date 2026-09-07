@@ -151,9 +151,16 @@ MAX_FIELDS = 30
 MAX_FIELD_DESC_LEN = 300
 
 # Front matter keys Steno owns. A template declaring one of these could break
-# the UI (title, processing) or corrupt provenance (detected_language).
+# the UI (processing) or corrupt provenance (detected_language).
+#
+# `title` is deliberately NOT reserved: declared fields land on the REPORT, not
+# the note, and the Obsidian export lets a report's front matter win — so a
+# template naming its own title (e.g. prefixed with the client) is the intended
+# way to title the vault note. `template_id` and `inferred` are reserved
+# because the extractor derives them.
 RESERVED_FIELD_NAMES = frozenset({
-    "title", "date", "duration_seconds", "language", "configured_language",
+    "template_id", "inferred",
+    "date", "duration_seconds", "language", "configured_language",
     "detected_language", "is_diarised", "folders", "transcription_failed",
     "reprocessable", "audio_file", "error", "notes_generated", "notes_stale",
     "is_live_transcript", "processing", "updated_at", "source", "steno_stem",
