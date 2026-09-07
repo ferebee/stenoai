@@ -299,8 +299,9 @@ def _render_frontmatter(meta: dict) -> list[str]:
     ``---`` fences) from a flat dict, with the type-specific scalar
     formatting the streaming save paths use.
 
-    Shared by ``process_recording_streaming``, ``process_streaming`` and the
-    transcription-failure writer so the frontmatter format stays in one place.
+    Shared by ``process_recording_streaming``, ``process_streaming``, the
+    reprocess writer and the transcription-failure writer so the frontmatter
+    format stays in one place.
     ``bool`` is checked before ``int`` because ``bool`` is an ``int`` subclass.
     """
     lines = ['---']
@@ -311,12 +312,58 @@ def _render_frontmatter(meta: dict) -> list[str]:
             lines.append(f'{k}: {"true" if v else "false"}')
         elif isinstance(v, int):
             lines.append(f'{k}: {v}')
+        elif isinstance(v, list):
+            # One-line JSON array, matching how folders is written and read
+            # everywhere else. The reprocess writer had this branch inlined;
+            # it was missing here, so a list reached the quoted-string fallback.
+            lines.append(f'{k}: {json.dumps(v)}')
         else:
             escaped = str(v).replace('\\', '\\\\').replace('"', '\\"')
             lines.append(f'{k}: "{escaped}"')
     lines.append('---')
     return lines
 
+
+
+# Front matter keys the save paths own. They are rewritten from the freshly
+# built meta on every save, and a key ABSENT from that meta is absent on
+# purpose — reprocess omits notes_generated so a transcript-only note flips out
+# of the "no notes yet" state (#258). Carrying those forward would resurrect
+# stale state, so preservation deliberately skips them.
+_OWNED_FRONTMATTER_KEYS = frozenset({
+    'title', 'date', 'duration_seconds', 'language', 'configured_language',
+    'detected_language', 'is_diarised', 'folders', 'transcription_failed',
+    'reprocessable', 'audio_file', 'error', 'notes_generated', 'notes_stale',
+    'is_live_transcript', 'processing',
+})
+
+
+def _merge_preserved_frontmatter(summary_path, meta: dict) -> dict:
+    """Carry forward front matter keys this writer does not own.
+
+    Every save path rebuilds the block from a fresh ``meta`` dict, so any key it
+    does not know about is destroyed the next time a note is written — including
+    properties a user added by hand in their Obsidian vault, which round-trips
+    through this file. Steno owns the keys it writes; everything else is left
+    alone. A no-op when the note does not exist yet (the common case: a new
+    recording), so this is safe to apply on every save path.
+    """
+    try:
+        if not Path(summary_path).exists():
+            return meta
+        text = Path(summary_path).read_text(encoding='utf-8')
+    except OSError:
+        return meta
+    try:
+        from src.report_store import _split_frontmatter
+        existing, _ = _split_frontmatter(text)
+    except Exception:
+        return meta
+    merged = dict(meta)
+    for k, v in existing.items():
+        if k not in merged and k not in _OWNED_FRONTMATTER_KEYS:
+            merged[k] = v
+    return merged
 
 def _persist_speaker_sidecar(output_dir, meeting_stem: str, transcript_data: dict) -> bool:
     """Write the `{stem}_speakers.json` sidecar from diarization output a
@@ -709,7 +756,7 @@ Summary output language: {config.get_language_name(output_language)}
             'audio_file': str(audio_path),
             'error': short_error,
         }
-        md_lines = _render_frontmatter(md_meta)
+        md_lines = _render_frontmatter(_merge_preserved_frontmatter(summary_path, md_meta))
         md_lines.append('')
         # Write the message under a `## Summary` heading so it survives
         # _parse_meeting_markdown (which only captures text under `## `
@@ -811,7 +858,7 @@ Summary output language: {config.get_language_name(output_language)}
                 'is_diarised': transcript_data.get('is_diarised', False),
                 'notes_generated': False,
             }
-            md_lines = _render_frontmatter(md_meta)
+            md_lines = _render_frontmatter(_merge_preserved_frontmatter(summary_path, md_meta))
             md_lines.append('')
             md_lines.append('## Transcript')
             md_lines.append('')
@@ -908,7 +955,7 @@ Summary output language: {config.get_language_name(output_language)}
             'detected_language': transcript_data.get('detected_language'),
             'is_diarised': transcript_data.get('is_diarised', False),
         }
-        md_lines = _render_frontmatter(md_meta)
+        md_lines = _render_frontmatter(_merge_preserved_frontmatter(summary_path, md_meta))
         md_lines.append('')
         md_lines.append(streamed_md)
         md_lines.append('')
@@ -1415,7 +1462,7 @@ def process_streaming(audio_file, name, notes, live_transcript, append_to):
             }
             if is_live_transcript:
                 md_meta['is_live_transcript'] = True
-            md_lines = _render_frontmatter(md_meta)
+            md_lines = _render_frontmatter(_merge_preserved_frontmatter(summary_path, md_meta))
             md_lines.append('')
             md_lines.append('## Transcript')
             md_lines.append('')
@@ -1532,7 +1579,7 @@ def process_streaming(audio_file, name, notes, live_transcript, append_to):
         # transcript came from the live capture, not a batch transcription.
         if is_live_transcript:
             md_meta['is_live_transcript'] = True
-        md_lines = _render_frontmatter(md_meta)
+        md_lines = _render_frontmatter(_merge_preserved_frontmatter(summary_path, md_meta))
         md_lines.append('')
         md_lines.append(streamed_md)
         md_lines.append('')
@@ -3371,7 +3418,6 @@ def reprocess(summary_file, regenerate_title, retranscribe):
         # Save updated summary
         if summary_path.suffix == '.md':
             session_name = existing_data.get('session_info', {}).get('name', 'Reprocessed')
-            md_lines = ['---']
             # This rebuild intentionally omits notes_generated: reprocessing a
             # transcript-only note (#258) generates the summary, so the rewritten
             # frontmatter naturally flips the meeting out of the "no notes yet"
@@ -3396,19 +3442,10 @@ def reprocess(summary_file, regenerate_title, retranscribe):
             # "only set when true, never explicit false" pattern used elsewhere.
             if existing_data.get('session_info', {}).get('is_live_transcript'):
                 md_meta['is_live_transcript'] = True
-            for k, v in md_meta.items():
-                if v is None:
-                    md_lines.append(f'{k}: null')
-                elif isinstance(v, bool):
-                    md_lines.append(f'{k}: {"true" if v else "false"}')
-                elif isinstance(v, int):
-                    md_lines.append(f'{k}: {v}')
-                elif isinstance(v, list):
-                    md_lines.append(f'{k}: {json.dumps(v)}')
-                else:
-                    escaped = str(v).replace('\\', '\\\\').replace('"', '\\"')
-                    md_lines.append(f'{k}: "{escaped}"')
-            md_lines.append('---')
+            # Was a fourth hand-rolled copy of the front matter renderer; use the
+            # shared one, and carry forward keys this writer does not own.
+            md_lines = _render_frontmatter(
+                _merge_preserved_frontmatter(summary_path, md_meta))
             md_lines.append('')
             # Write the raw streamed markdown (preserves LLM formatting)
             md_lines.append(streamed_md)
