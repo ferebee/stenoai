@@ -146,13 +146,7 @@ FIELDS_BLOCK_RE = re.compile(r"```fields[ \t]*\n(.*?)```", re.S)
 # recommend using the source mode").
 FIELD_TYPES = frozenset({"text", "list", "number", "checkbox", "date", "datetime"})
 
-# Hyphens are allowed as well as underscores: both are valid YAML keys, valid
-# JSON keys, and valid Obsidian property names. A hyphenated name reads better
-# in a properties panel, at the cost of needing bracket access in Dataview and
-# Bases expressions (`row["next-steps"]`), where a bare next-steps would parse
-# as subtraction. Must still start with a letter and stay lower case, so the
-# name is stable across YAML round-trips.
-FIELD_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]*$")
+FIELD_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 MAX_FIELDS = 30
 MAX_FIELD_DESC_LEN = 300
 
