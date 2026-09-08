@@ -146,6 +146,15 @@ FIELDS_BLOCK_RE = re.compile(r"```fields[ \t]*\n(.*?)```", re.S)
 # recommend using the source mode").
 FIELD_TYPES = frozenset({"text", "list", "number", "checkbox", "date", "datetime"})
 
+# lower_snake_case only. A hyphen is a valid YAML key, a valid JSON key and a
+# valid Obsidian property name, and reads better in a properties panel — but a
+# bare `next-steps` in a Dataview or Bases expression parses as subtraction, so
+# a hyphenated field is reachable only through bracket access
+# (`row["next-steps"]`). Rejecting hyphens here keeps every declared field
+# usable in a query the obvious way, and matches the snake_case Steno already
+# uses throughout its own front matter (duration_seconds, configured_language,
+# is_diarised). Must start with a letter and stay lower case, so the name is
+# stable across YAML round-trips.
 FIELD_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 MAX_FIELDS = 30
 MAX_FIELD_DESC_LEN = 300

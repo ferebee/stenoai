@@ -339,3 +339,57 @@ class MalformedFieldsBlockTests(unittest.TestCase):
             "Prose.\n\n```fields\nclient: text — a: b\n```\n", "tid")
         self.assertEqual(fields, [])
         self.assertEqual(instruction, "")
+
+
+class HyphenatedFieldNameTests(unittest.TestCase):
+    """Hyphens are valid YAML/JSON keys and valid Obsidian properties, so they
+    parse — but a bare `next-steps` in a Dataview or Bases expression reads as
+    subtraction, so validation rejects them and the name stays snake_case."""
+
+    def test_hyphenated_names_parse_but_do_not_validate(self):
+        from src.templates import parse_fields_block, validate_fields
+        fields, _, err = parse_fields_block(
+            "Prose.\n\n```fields\nnext-steps: list — agreed actions\n"
+            "follow-up: date — only if named\nissue: text — the topic\n```\n")
+        # The YAML is fine; it is the NAME that is refused, and the two are
+        # reported separately so a template author is told which one it is.
+        self.assertIsNone(err)
+        self.assertEqual([f["name"] for f in fields], ["next-steps", "follow-up", "issue"])
+        ok, msg = validate_fields(fields)
+        self.assertFalse(ok)
+        self.assertIn("next-steps", msg)
+        self.assertIn("lower_snake_case", msg)
+
+    def test_the_snake_case_equivalents_validate(self):
+        from src.templates import parse_fields_block, validate_fields
+        fields, _, err = parse_fields_block(
+            "Prose.\n\n```fields\nnext_steps: list — agreed actions\n"
+            "follow_up: date — only if named\nissue: text — the topic\n```\n")
+        self.assertIsNone(err)
+        self.assertTrue(validate_fields(fields)[0])
+
+    def test_a_leading_hyphen_is_still_rejected(self):
+        from src.templates import validate_fields
+        ok, msg = validate_fields([{"name": "-bad", "type": "text"}])
+        self.assertFalse(ok)
+        self.assertIn("Invalid field name", msg)
+
+    def test_a_hyphenated_declaration_falls_back_to_prose(self):
+        """The whole template still produces a report — it just loses the
+        structured half, rather than failing the recording."""
+        with tempfile.TemporaryDirectory() as tmp:
+            c = Config(config_path=Path(tmp) / "config.json")
+            ok, _, saved = c.save_template({
+                "name": "Hyphen", "language": "auto",
+                "prompt": "Write it.\n\n```fields\nnext-steps: list — actions\n```\n"})
+            assert ok
+            c.set_default_template(saved["id"])
+            mp = Path(tmp) / "m_summary.md"
+            mp.write_text("---\n---\n\n## Summary\nx\n", encoding="utf-8")
+            simple_recorder.generate_default_template_report(
+                mp, "T: hi", None, "en", 1, c,
+                _FakeSummarizer(['```json\n{"next-steps": ["send the paper"]}\n```\n\nprose\n']))
+            content = report_store.load_sidecar(mp)["reports"][0]["content"]
+            fm, body = report_store._split_frontmatter(content)
+            self.assertNotIn("next-steps", fm)
+            self.assertIn("prose", body)
