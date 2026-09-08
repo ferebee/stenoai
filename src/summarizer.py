@@ -188,6 +188,7 @@ class OllamaSummarizer:
         self.ai_provider = ai_provider or config.get_ai_provider()
         self.client = None
         self.cloud_client = None
+        self.cloud_temperature = None
         self.anthropic_client = None
         self.cloud_provider = None
         self.ollama_process = None
@@ -222,6 +223,10 @@ class OllamaSummarizer:
             self.cloud_provider = config.get_cloud_provider()
             cloud_api_url = config.get_cloud_api_url()
             self.model_name = model_name or config.get_cloud_model()
+            # None unless configured, in which case the parameter is omitted and
+            # the server's own default applies — the behaviour Steno has always
+            # had. See Config.get_cloud_temperature.
+            self.cloud_temperature = config.get_cloud_temperature()
 
             if not cloud_api_key:
                 raise ValueError("Cloud API key is not configured. Set it in Settings > AI.")
@@ -316,6 +321,13 @@ class OllamaSummarizer:
         consistent and Ollama doesn't reload the model between calls.
         """
         return {"num_ctx": resolve_num_ctx(self.model_name)}
+
+    def _cloud_kwargs(self) -> Dict[str, Any]:
+        """Extra request kwargs for cloud calls. Empty unless a temperature is
+        configured, so an unset config sends exactly what it always did."""
+        if getattr(self, "cloud_temperature", None) is None:
+            return {}
+        return {"temperature": self.cloud_temperature}
 
     def _chunk_budget_chars(self) -> int:
         """Total chars per chunk: content + overlap prefix, sized for the model."""
@@ -830,6 +842,7 @@ class OllamaSummarizer:
                     model=self.model_name,
                     messages=[{"role": "user", "content": prompt}],
                     timeout=timeout_seconds,
+                    **self._cloud_kwargs(),
                 )
                 return response.choices[0].message.content.strip()
 
@@ -1563,6 +1576,7 @@ TRANSCRIPT:
                         model=self.model_name,
                         messages=[{"role": "user", "content": prompt}],
                         stream=True,
+                        **self._cloud_kwargs(),
                     )
                     for chunk in response:
                         if not chunk.choices:
@@ -1902,6 +1916,7 @@ ANSWER:"""
                     model=self.model_name,
                     messages=[{"role": "user", "content": prompt}],
                     stream=True,
+                    **self._cloud_kwargs(),
                 )
                 for chunk in response:
                     # Some providers emit usage-only chunks with no choices.

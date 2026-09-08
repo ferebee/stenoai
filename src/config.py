@@ -2607,6 +2607,39 @@ class Config:
         import os
         return os.environ.get("STENOAI_CLOUD_API_KEY", "")
 
+    def get_cloud_temperature(self):
+        """Sampling temperature for cloud requests, or None to send none.
+
+        Steno has always omitted the parameter and taken each server's default,
+        which for a local server is typically around 0.7 — high for a task that
+        is extraction, not writing. A summary is not meant to be creative, and
+        the variance shows: the same transcript yields a field populated on one
+        run and empty on the next, and a model with a multilingual pretraining
+        distribution occasionally samples a token from the wrong script
+        (Chinese characters mid-German).
+
+        Default stays None so behaviour is unchanged unless asked for.
+        """
+        value = self._config.get("cloud_temperature")
+        if value is None:
+            return None
+        try:
+            temp = float(value)
+        except (TypeError, ValueError):
+            return None
+        return max(0.0, min(2.0, temp))
+
+    def set_cloud_temperature(self, temperature) -> bool:
+        """Set the sampling temperature; None restores the server's default."""
+        if temperature is None:
+            self._config.pop("cloud_temperature", None)
+        else:
+            try:
+                self._config["cloud_temperature"] = max(0.0, min(2.0, float(temperature)))
+            except (TypeError, ValueError):
+                return False
+        return self._save()
+
     def get_adapter_url(self) -> str:
         """Get the org adapter base URL (set by Electron when a session is
         active). The summariser uses this when ai_provider == 'adapter' to
