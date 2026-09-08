@@ -1080,10 +1080,15 @@ _REPORT_NOTE_KEYS = ("date", "duration_seconds", "language")
 def _note_meta_for_report(summary_path) -> dict:
     """The note metadata a report should carry. Empty when unreadable.
 
-    Also derives a human-readable `duration`. Both forms are kept: an agent
-    filters and sorts on the seconds, a person reads "9:47" — and a display
-    layer cannot compute one from the other (CSS has no arithmetic), so the
-    conversion has to happen where the data is written.
+    Also derives a human-readable `duration` in h:mm. Both forms are kept: an
+    agent filters and sorts on the seconds, a person reads "0:10" — and a
+    display layer cannot compute one from the other (CSS has no arithmetic), so
+    the conversion has to happen where the data is written.
+
+    h:mm, never m:ss, so it matches the other visible time on the note (`worked`
+    from the template) and the two can be read against each other. Seconds do
+    not survive: they are noise at review time, and keeping them would mean
+    "9:47" was ambiguous between nine minutes and nine hours.
     """
     try:
         text = Path(summary_path).read_text(encoding="utf-8")
@@ -1096,9 +1101,9 @@ def _note_meta_for_report(summary_path) -> dict:
         return {}
     meta = {k: fm[k] for k in _REPORT_NOTE_KEYS if fm.get(k) is not None}
     secs = meta.get("duration_seconds")
-    if isinstance(secs, int) and secs > 0:
-        meta["duration"] = (f"{secs // 3600}:{secs % 3600 // 60:02d}:{secs % 60:02d}"
-                            if secs >= 3600 else f"{secs // 60}:{secs % 60:02d}")
+    if isinstance(secs, (int, float)) and not isinstance(secs, bool) and secs > 0:
+        mins = int(secs / 60 + 0.5)          # nearest minute, not truncated
+        meta["duration"] = f"{mins // 60}:{mins % 60:02d}"
     return meta
 
 
