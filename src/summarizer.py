@@ -144,9 +144,14 @@ def build_fields_instruction(fields: list) -> str:
     """
     if not fields:
         return ""
-    _EMPTY = {"list": "[]", "checkbox": "false", "number": "0"}
+    # Only a list gets a non-null placeholder. `0` and `false` are ASSERTIONS —
+    # "zero hours spent", "not billable" — where the skeleton needs to mean "not
+    # established", and a model copying the shape will emit them for a call that
+    # simply never mentioned the thing. It also matched the instruction below,
+    # which has always said "null (or [] for a list)", against the code.
     skeleton = ",\n".join(
-        f'  "{f["name"]}": {_EMPTY.get(f["type"], "null")}' for f in fields)
+        f'  "{f["name"]}": {"[]" if f["type"] == "list" else "null"}'
+        for f in fields)
 
     width = max(len(f["name"]) for f in fields)
     meanings = "\n".join(
