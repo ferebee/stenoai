@@ -16,6 +16,7 @@ class _FakeSummarizer:
                                        fields_instruction=""):
         # assert the template prompt is threaded through
         assert template_prompt, "expected a template prompt"
+        self.last_template_prompt = template_prompt
         self.last_fields_instruction = fields_instruction
         for c in self._chunks:
             yield c
@@ -393,3 +394,27 @@ class HyphenatedFieldNameTests(unittest.TestCase):
             fm, body = report_store._split_frontmatter(content)
             self.assertNotIn("next-steps", fm)
             self.assertIn("prose", body)
+
+    def test_a_rejected_declaration_never_reaches_the_model(self):
+        """The block must be STRIPPED, not passed through.
+
+        Sent as-is, a model reads ```fields as a form to fill in and answers it
+        in that YAML. Nothing extracts a block that failed validation, so the
+        filled-in form ends up in the report body and in the vault.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            c = Config(config_path=Path(tmp) / "config.json")
+            ok, _, saved = c.save_template({
+                "name": "Hyphen", "language": "auto",
+                "prompt": "Write it.\n\n```fields\nnext-steps: list — actions\n```\n"})
+            assert ok
+            c.set_default_template(saved["id"])
+            mp = Path(tmp) / "m_summary.md"
+            mp.write_text("---\n---\n\n## Summary\nx\n", encoding="utf-8")
+            fake = _FakeSummarizer(["prose\n"])
+            simple_recorder.generate_default_template_report(
+                mp, "T: hi", None, "en", 1, c, fake)
+            self.assertNotIn("```fields", fake.last_template_prompt)
+            self.assertNotIn("next-steps", fake.last_template_prompt)
+            self.assertIn("Write it.", fake.last_template_prompt)
+            self.assertEqual(fake.last_fields_instruction, "")

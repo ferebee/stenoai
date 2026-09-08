@@ -1078,7 +1078,13 @@ _REPORT_NOTE_KEYS = ("date", "duration_seconds", "language")
 
 
 def _note_meta_for_report(summary_path) -> dict:
-    """The note metadata a report should carry. Empty when unreadable."""
+    """The note metadata a report should carry. Empty when unreadable.
+
+    Also derives a human-readable `duration`. Both forms are kept: an agent
+    filters and sorts on the seconds, a person reads "9:47" — and a display
+    layer cannot compute one from the other (CSS has no arithmetic), so the
+    conversion has to happen where the data is written.
+    """
     try:
         text = Path(summary_path).read_text(encoding="utf-8")
     except OSError:
@@ -1088,7 +1094,12 @@ def _note_meta_for_report(summary_path) -> dict:
         fm, _ = _split_frontmatter(text)
     except Exception:
         return {}
-    return {k: fm[k] for k in _REPORT_NOTE_KEYS if fm.get(k) is not None}
+    meta = {k: fm[k] for k in _REPORT_NOTE_KEYS if fm.get(k) is not None}
+    secs = meta.get("duration_seconds")
+    if isinstance(secs, int) and secs > 0:
+        meta["duration"] = (f"{secs // 3600}:{secs % 3600 // 60:02d}:{secs % 60:02d}"
+                            if secs >= 3600 else f"{secs // 60}:{secs % 60:02d}")
+    return meta
 
 
 def _build_field_frontmatter(data: dict, fields: list, template_id: str,
@@ -1191,6 +1202,13 @@ def declared_fields_for(prompt: str, template_id: str):
     Returns no fields when the template declares none — the common case, which
     leaves the caller's behaviour exactly as it was — or when the declaration
     is invalid, which is logged rather than raised.
+
+    On EVERY path the returned prompt is safe to send: a declaration that could
+    not be used is stripped out, never passed through. Sending it is worse than
+    useless — a model reads a ```fields block as a form to fill in, answers it
+    in the declaration's own YAML, and since nothing downstream extracts a
+    block that failed validation, the filled-in form travels into the report
+    body and out to the vault as a wall of text. "Prose only" has to mean it.
     """
     from src.templates import parse_fields_block, validate_fields
     fields, prose, err = parse_fields_block(prompt)
@@ -1206,7 +1224,7 @@ def declared_fields_for(prompt: str, template_id: str):
     if not ok:
         logger.warning(f"[template-data] {template_id}: invalid field declaration "
                        f"({err}); generating prose only")
-        return [], prompt, ""
+        return [], prose, ""
     return fields, prose, _summarizer_fields_instruction(fields)
 
 
@@ -1286,7 +1304,7 @@ def generate_default_template_report(summary_path, transcript, notes, language,
                 # Only pass fields_instruction when there is one, so a template
                 # without declared fields calls exactly the signature it always
                 # did.
-                kwargs = {"template_prompt": prose_prompt if fields else tmpl["prompt"]}
+                kwargs = {"template_prompt": prose_prompt}
                 if fields_instruction:
                     kwargs["fields_instruction"] = fields_instruction
                 for chunk in summarizer.summarize_transcript_streaming(
