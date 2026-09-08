@@ -118,10 +118,13 @@ class GenerateReportCliTests(unittest.TestCase):
 
             fake_summarizer = mock.MagicMock()
             fake_summarizer.model_name = "llama3.2:3b"
+            # Two passes now: the prose pass streams the report, the data pass
+            # returns the object on its own.
             fake_summarizer.summarize_transcript_streaming.return_value = iter([
-                '```json\n{"client": "ABC GmbH", "billable": true}\n```\n\n',
                 "## Zusammenfassung\nEs lief gut.\n",
             ])
+            fake_summarizer.extract_fields_json.return_value = (
+                '{"client": "ABC GmbH", "billable": true}')
 
             with mock.patch("src.config.get_config", return_value=cfg), \
                  mock.patch("src.summarizer.OllamaSummarizer", return_value=fake_summarizer):
@@ -139,12 +142,17 @@ class GenerateReportCliTests(unittest.TestCase):
             self.assertNotIn("```json", content["content"])
             self.assertIn("raw_json", content)
 
-            # The generated json instruction reached the model on the FIRST pass,
-            # not only on a retry.
-            sent = fake_summarizer.summarize_transcript_streaming.call_args
-            self.assertIn("fields_instruction", sent.kwargs)
-            self.assertIn("client", sent.kwargs["fields_instruction"])
-            self.assertNotIn("```fields", sent.kwargs["template_prompt"])
+            # Each pass is asked for one thing. The data pass carries the
+            # generated instruction and ran exactly once — no retry was needed.
+            self.assertEqual(fake_summarizer.extract_fields_json.call_count, 1)
+            data_args = fake_summarizer.extract_fields_json.call_args.args
+            self.assertIn("client", data_args[2])          # fields_instruction
+            self.assertNotIn("```fields", data_args[1])    # prose guidance only
+
+            # And the prose pass never sees the field declaration at all.
+            prose = fake_summarizer.summarize_transcript_streaming.call_args
+            self.assertNotIn("fields_instruction", prose.kwargs)
+            self.assertNotIn("```fields", prose.kwargs["template_prompt"])
 
 
 if __name__ == "__main__":

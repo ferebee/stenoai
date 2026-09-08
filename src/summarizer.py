@@ -137,10 +137,12 @@ def build_fields_instruction(fields: list) -> str:
     Generated rather than user-written so the declaration is the single source
     of truth for the prompt, the validation and the inferred list.
 
-    NOTE: this asks for a fenced block inside a markdown reply, NOT a
-    response_format json_object — the reply has to carry prose as well, and
-    json_object would force the WHOLE response to be JSON. That is the cost of
-    doing this in one pass; a second call could enforce it.
+    This is the DATA pass and asks for nothing but the object, so the request
+    can carry response_format json_object where the server supports it — which
+    makes malformed output structurally impossible rather than something to
+    repair afterwards. It is also why the pass exists: asking one completion to
+    satisfy a JSON schema AND write a report gives the model two jobs, and the
+    failures land on whichever it weighs less.
     """
     if not fields:
         return ""
@@ -163,16 +165,17 @@ def build_fields_instruction(fields: list) -> str:
     # (one emitted a ```fields block copying the declaration's own shape) and
     # extraction then finds no json at all.
     return (
-        "\n\nBegin your reply with a fenced ```json block in exactly this shape, "
-        "with exactly these keys and no others:\n\n"
-        "```json\n{\n" + skeleton + "\n}\n```\n\n"
+        "\n\nReturn a JSON object in exactly this shape, with exactly these keys "
+        "and no others:\n\n"
+        "{\n" + skeleton + "\n}\n\n"
         "What each key means:\n\n" + meanings + "\n\n"
-        "It must be valid JSON: double-quoted keys and strings, no comments, no "
-        "trailing commas. Quote every value that is not null, true or false — "
-        "including one that looks like a number or a time, such as 0:45, which "
-        "is not valid JSON unquoted. Leave a value at null (or [] for a list) "
-        "when the call did not establish it — never guess to fill a field. "
-        "Dates are YYYY-MM-DD. After the closing ``` write the prose report."
+        "Reply with that object and nothing else — no prose, no explanation, no "
+        "markdown fence. It must be valid JSON: double-quoted keys and strings, "
+        "no comments, no trailing commas. Quote every value that is not null, "
+        "true or false — including one that looks like a number or a time, such "
+        "as 0:45, which is not valid JSON unquoted. Leave a value at null (or [] "
+        "for a list) when the call did not establish it — never guess to fill a "
+        "field. Dates are YYYY-MM-DD."
     )
 
 
@@ -1475,12 +1478,10 @@ Only include information explicitly discussed. Do not infer or assume.{language_
 TRANSCRIPT:
 {transcript}"""
 
-    def _create_template_report_prompt(self, transcript: str, template_prompt: str,
-                                       language: str = "en", notes: str = None,
-                                       fields_instruction: str = "") -> str:
-        """Free-form report prompt: the user's template instructions over the
-        transcript. Unlike _create_markdown_prompt there is NO fixed section
-        schema — the template decides the shape. Output is raw markdown."""
+    def _prompt_context(self, transcript: str, language: str, notes: str):
+        """(diarisation_note, notes_context, language_instruction) — the framing
+        both template passes share, so the data pass and the prose pass see the
+        same call from the same angle."""
         if language and language not in ("en", "auto"):
             from .config import get_config
             language_name = get_config().get_language_name(language)
@@ -1496,13 +1497,91 @@ TRANSCRIPT:
         diarisation_note = ""
         if "[You]" in transcript and "[Others]" in transcript:
             diarisation_note = "NOTE: [You] is the recorder, [Others] are remote participants.\n\n"
+        return diarisation_note, notes_context, language_instruction
+
+    def _create_template_report_prompt(self, transcript: str, template_prompt: str,
+                                       language: str = "en", notes: str = None) -> str:
+        """PROSE pass: the user's template instructions over the transcript.
+        Unlike _create_markdown_prompt there is NO fixed section schema — the
+        template decides the shape. Output is raw markdown.
+
+        Carries no field declaration. A template's structured half is asked for
+        separately by _create_fields_prompt, so neither completion has to serve
+        two output formats at once.
+        """
+        diarisation_note, notes_context, language_instruction = self._prompt_context(
+            transcript, language, notes)
         return (
-            f"{diarisation_note}{notes_context}{template_prompt.strip()}"
-            f"{fields_instruction}\n\n"
+            f"{diarisation_note}{notes_context}{template_prompt.strip()}\n\n"
             "Base the report only on what was explicitly discussed; do not infer. "
             "Output the report as markdown with no preamble."
             f"{language_instruction}\n\nTRANSCRIPT:\n{transcript}"
         )
+
+    def _create_fields_prompt(self, transcript: str, template_prompt: str,
+                              fields_instruction: str, language: str = "en",
+                              notes: str = None) -> str:
+        """DATA pass: the same framing and the same template guidance, but the
+        only thing asked for is the JSON object.
+
+        The guidance goes to both passes because a template's rules about what
+        counts as a change, or what may stand as a client name, govern the field
+        values as much as the prose. The prose SECTIONS are simply never asked
+        for here, so the model has one job.
+        """
+        diarisation_note, notes_context, language_instruction = self._prompt_context(
+            transcript, language, notes)
+        return (
+            f"{diarisation_note}{notes_context}{template_prompt.strip()}"
+            f"{fields_instruction}\n\n"
+            "Base your answer only on what was explicitly discussed."
+            f"{language_instruction}\n\nTRANSCRIPT:\n{transcript}"
+        )
+
+    def complete_json(self, prompt: str) -> str:
+        """One NON-streaming completion, in JSON mode where the provider has one.
+
+        Nothing streams because nothing is displayed: the data pass produces a
+        machine artefact, and the user watches the prose pass instead.
+        """
+        if self.ai_provider == "cloud" and self.cloud_provider not in ("anthropic", "bedrock"):
+            try:
+                response = self.cloud_client.chat.completions.create(
+                    model=self.model_name,
+                    messages=[{"role": "user", "content": prompt}],
+                    response_format={"type": "json_object"},
+                    **self._cloud_kwargs(),
+                )
+                return (response.choices[0].message.content or "").strip()
+            except Exception as e:
+                # A server that does not know response_format must not cost the
+                # fields entirely — fall through to the plain path below.
+                logger.warning(f"[template-data] json mode unavailable ({e}); "
+                               f"retrying without it")
+        if self.ai_provider in ("local", "remote"):
+            try:
+                if self.ai_provider != "remote":
+                    self._ensure_ollama_ready()
+                response = self.client.chat(
+                    model=self.model_name,
+                    messages=[{"role": "user", "content": prompt}],
+                    options=self._ollama_options(),
+                    format="json",
+                )
+                return (response.get("message", {}).get("content", "") or "").strip()
+            except Exception as e:
+                logger.warning(f"[template-data] ollama json mode failed ({e}); "
+                               f"falling back to a plain completion")
+        return "".join(self._stream_completion(prompt)).strip()
+
+    def extract_fields_json(self, transcript: str, template_prompt: str,
+                            fields_instruction: str, language: str = "en",
+                            notes: str = None) -> str:
+        """The data pass. Returns the model's raw reply; parsing is the caller's."""
+        transcript = _strip_leading_timestamps(transcript)
+        prompt = self._create_fields_prompt(
+            transcript, template_prompt, fields_instruction, language, notes)
+        return self.complete_json(prompt)
 
     def _stream_direct(self, prompt: str):
         """Stream a single non-chunked completion for ``prompt`` via local/remote
@@ -1603,8 +1682,7 @@ TRANSCRIPT:
             logger.error(f"Ollama streaming failed: {e}")
             raise
 
-    def summarize_transcript_streaming(self, transcript: str, duration_minutes: int = 0, language: str = "en", notes: str = None, progress_callback=None, template_prompt: Optional[str] = None,
-                                     fields_instruction: str = ""):
+    def summarize_transcript_streaming(self, transcript: str, duration_minutes: int = 0, language: str = "en", notes: str = None, progress_callback=None, template_prompt: Optional[str] = None):
         """Generator that yields markdown chunks from the LLM.
 
         Args:
@@ -1628,7 +1706,7 @@ TRANSCRIPT:
             # ACTIVE provider — not straight to Ollama, which has no client and
             # would crash in cloud/adapter mode.
             prompt = self._create_template_report_prompt(
-                transcript, template_prompt, language, notes, fields_instruction)
+                transcript, template_prompt, language, notes)
             inner = self._stream_completion(prompt)
             empty_message = "Model returned an empty report"
         elif self._needs_chunking(transcript, notes):

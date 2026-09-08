@@ -1031,6 +1031,37 @@ def _split_json_block(text: str):
     return None, text.strip()
 
 
+def _parse_data_reply(text):
+    """The dict from a data pass, or None.
+
+    json mode should make this trivial, but not every provider has one, so it
+    still tolerates the two things a model does when told to emit bare JSON and
+    not quite believing it: wrapping the object in a fence, or introducing it
+    with a sentence.
+    """
+    text = (text or "").strip()
+    if not text:
+        return None
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            return data
+    except (ValueError, TypeError):
+        pass
+    data, _ = _split_json_block(text)
+    if isinstance(data, dict):
+        return data
+    i, j = text.find("{"), text.rfind("}")
+    if 0 <= i < j:
+        try:
+            data = json.loads(text[i:j + 1])
+            if isinstance(data, dict):
+                return data
+        except (ValueError, TypeError):
+            pass
+    return None
+
+
 def _coerce_field(value, ftype: str):
     """Coerce to the declared type. Returns (value, ok).
 
@@ -1233,9 +1264,9 @@ def declared_fields_for(prompt: str, template_id: str):
     return fields, prose, _summarizer_fields_instruction(fields)
 
 
-def apply_declared_fields(content: str, fields: list, template_id: str,
-                          regenerate=None, summary_path=None):
-    """Turn a template's raw output into a report with YAML front matter.
+def apply_declared_fields(prose: str, fields: list, template_id: str,
+                          extract=None, summary_path=None):
+    """Join a template's prose report to the fields from its data pass.
 
     Shared by every path that produces a template report — the recording
     pipeline and the standalone `generate-report` command — so extraction can
@@ -1245,29 +1276,28 @@ def apply_declared_fields(content: str, fields: list, template_id: str,
     followed by the declared fields, so the same YAML travels from the sidecar
     blob to a vault note with nothing reassembled at export.
 
-    Returns (content, raw_json). With no declared fields, or when the model's
-    json cannot be parsed even after a retry, `content` comes back unchanged
-    and `raw_json` is None: a report is never lost to this step.
+    Returns (content, raw_json). With no declared fields, or when the data pass
+    cannot be parsed even after a retry, `prose` comes back unchanged and
+    `raw_json` is None: a report is never lost to this step.
 
-    `regenerate` is an optional zero-arg callable used for the single retry.
+    `extract` is a zero-arg callable running the data pass and returning the
+    model's raw reply.
     """
     if not fields:
-        return content, None
+        return prose, None
 
-    data, prose = _split_json_block(content)
-    if data is None and regenerate is not None:
-        # OPEN (see TEMPLATE-DATA-DESIGN.md): one retry, deliberately loud --
-        # it costs a full second pass over the transcript.
-        logger.warning(f"[template-data] RETRY: no valid json block from {template_id} "
-                       f"— regenerating (a second pass over the transcript)")
+    data = _parse_data_reply(extract()) if extract is not None else None
+    if data is None and extract is not None:
+        # Cheap now that the passes are split: a retry re-runs the DATA pass
+        # only, so a failure here no longer costs the prose report as well.
+        logger.warning(f"[template-data] RETRY: unparseable data pass from "
+                       f"{template_id} — running it again")
         print(f"TEMPLATE_DATA_RETRY:{template_id}", flush=True)
-        retried = regenerate()
-        if retried:
-            data, prose = _split_json_block(retried)
+        data = _parse_data_reply(extract())
     if data is None:
         logger.warning(f"[template-data] {template_id}: no valid json; keeping prose only")
         print(f"TEMPLATE_DATA_FAILED:{template_id}", flush=True)
-        return content, None
+        return prose, None
 
     note_meta = _note_meta_for_report(summary_path) if summary_path else {}
     fm, problems = _build_field_frontmatter(data, fields, template_id, note_meta)
@@ -1302,30 +1332,35 @@ def generate_default_template_report(summary_path, transcript, notes, language,
         # is what remains once that block is removed.
         fields, prose_prompt, fields_instruction = declared_fields_for(tmpl["prompt"], tid)
 
-        def _run():
+        def _prose():
             heartbeat = _start_summary_heartbeat(label="default-report")
             try:
                 chunks = []
-                # Only pass fields_instruction when there is one, so a template
-                # without declared fields calls exactly the signature it always
-                # did.
-                kwargs = {"template_prompt": prose_prompt}
-                if fields_instruction:
-                    kwargs["fields_instruction"] = fields_instruction
                 for chunk in summarizer.summarize_transcript_streaming(
-                    transcript, duration_minutes, report_language, notes, **kwargs
+                    transcript, duration_minutes, report_language, notes,
+                    template_prompt=prose_prompt
                 ):
                     chunks.append(chunk)
             finally:
                 heartbeat.set()
             return "".join(chunks).strip()
 
-        content = _run()
+        def _data():
+            heartbeat = _start_summary_heartbeat(label="default-report-data")
+            try:
+                return summarizer.extract_fields_json(
+                    transcript, prose_prompt, fields_instruction,
+                    report_language, notes)
+            finally:
+                heartbeat.set()
+
+        content = _prose()
         if not content:
             return None
 
         content, raw_json = apply_declared_fields(
-            content, fields, tid, regenerate=_run, summary_path=summary_path)
+            content, fields, tid,
+            extract=_data if fields else None, summary_path=summary_path)
 
         sidecar = _store.load_sidecar(summary_path)
         report = _reports.make_report(tid, tmpl["name"], summarizer.model_name, content)
@@ -4189,12 +4224,14 @@ def generate_report(summary_file, template_id):
 
     def _stream_report(progress=None):
         kwargs = {"template_prompt": _prose_prompt}
-        if _fields_instruction:
-            kwargs["fields_instruction"] = _fields_instruction
         if progress is not None:
             kwargs["progress_callback"] = progress
         return recorder.summarizer.summarize_transcript_streaming(
             transcript, duration_minutes, output_language, notes_text, **kwargs)
+
+    def _extract_fields():
+        return recorder.summarizer.extract_fields_json(
+            transcript, _prose_prompt, _fields_instruction, output_language, notes_text)
 
     print("Generating report...", flush=True)
     streamed_chunks = []
@@ -4227,7 +4264,7 @@ def generate_report(summary_file, template_id):
 
     streamed_md, raw_json = apply_declared_fields(
         streamed_md, _fields, template_id,
-        regenerate=lambda: "".join(_stream_report()).strip(),
+        extract=_extract_fields if _fields else None,
         summary_path=summary_path,
     )
 

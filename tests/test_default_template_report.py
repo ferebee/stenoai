@@ -1,5 +1,5 @@
 # tests/test_default_template_report.py
-import json, tempfile, unittest
+import json, re, tempfile, unittest
 from pathlib import Path
 from unittest import mock
 from src.config import Config
@@ -8,18 +8,42 @@ from src import report_store
 
 
 class _FakeSummarizer:
+    """Plays both passes from one fixture string.
+
+    Reports are generated in two completions now — a data pass returning JSON
+    and a prose pass returning the report — but a fixture reads better as the
+    single document it used to be, so the fake splits it: the fenced block is
+    what the data pass returns, the rest is what the prose pass streams. A test
+    that needs them to disagree passes `data` explicitly.
+    """
     model_name = "llama3.2:3b"
-    def __init__(self, chunks):
+
+    def __init__(self, chunks, data=None):
         self._chunks = chunks
+        self._data = data
+        self.data_calls = 0
+        self.last_template_prompt = ""
+        self.last_fields_instruction = ""
+
+    def _split(self):
+        text = "".join(self._chunks)
+        m = re.search(r"```[a-zA-Z]*[ \t]*\n(.*?)```", text, re.S)
+        if not m:
+            return "", text.strip()
+        return m.group(1).strip(), (text[:m.start()] + text[m.end():]).strip()
+
     def summarize_transcript_streaming(self, transcript, duration_minutes=0, language="en",
-                                       notes=None, progress_callback=None, template_prompt=None,
-                                       fields_instruction=""):
+                                       notes=None, progress_callback=None, template_prompt=None):
         # assert the template prompt is threaded through
         assert template_prompt, "expected a template prompt"
         self.last_template_prompt = template_prompt
+        yield self._split()[1]
+
+    def extract_fields_json(self, transcript, template_prompt, fields_instruction,
+                            language="en", notes=None):
+        self.data_calls += 1
         self.last_fields_instruction = fields_instruction
-        for c in self._chunks:
-            yield c
+        return self._data if self._data is not None else self._split()[0]
 
 
 def _cfg(tmp, default_id):
