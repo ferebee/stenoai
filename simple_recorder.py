@@ -1345,21 +1345,23 @@ def generate_default_template_report(summary_path, transcript, notes, language,
                 heartbeat.set()
             return "".join(chunks).strip()
 
+        prose_report = _prose()
+        if not prose_report:
+            return None
+
         def _data():
             heartbeat = _start_summary_heartbeat(label="default-report-data")
             try:
+                # The report goes with the transcript, not instead of it: it is
+                # a shortcut to the answers, not a replacement for the source.
                 return summarizer.extract_fields_json(
                     transcript, prose_prompt, fields_instruction,
-                    report_language, notes)
+                    report_language, notes, report=prose_report)
             finally:
                 heartbeat.set()
 
-        content = _prose()
-        if not content:
-            return None
-
         content, raw_json = apply_declared_fields(
-            content, fields, tid,
+            prose_report, fields, tid,
             extract=_data if fields else None, summary_path=summary_path)
 
         sidecar = _store.load_sidecar(summary_path)
@@ -4229,9 +4231,10 @@ def generate_report(summary_file, template_id):
         return recorder.summarizer.summarize_transcript_streaming(
             transcript, duration_minutes, output_language, notes_text, **kwargs)
 
-    def _extract_fields():
+    def _extract_fields(report=None):
         return recorder.summarizer.extract_fields_json(
-            transcript, _prose_prompt, _fields_instruction, output_language, notes_text)
+            transcript, _prose_prompt, _fields_instruction, output_language,
+            notes_text, report=report)
 
     print("Generating report...", flush=True)
     streamed_chunks = []
@@ -4264,7 +4267,7 @@ def generate_report(summary_file, template_id):
 
     streamed_md, raw_json = apply_declared_fields(
         streamed_md, _fields, template_id,
-        extract=_extract_fields if _fields else None,
+        extract=(lambda: _extract_fields(streamed_md)) if _fields else None,
         summary_path=summary_path,
     )
 

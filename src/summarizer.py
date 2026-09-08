@@ -1520,7 +1520,7 @@ TRANSCRIPT:
 
     def _create_fields_prompt(self, transcript: str, template_prompt: str,
                               fields_instruction: str, language: str = "en",
-                              notes: str = None) -> str:
+                              notes: str = None, report: str = None) -> str:
         """DATA pass: the same framing and the same template guidance, but the
         only thing asked for is the JSON object.
 
@@ -1528,14 +1528,31 @@ TRANSCRIPT:
         counts as a change, or what may stand as a client name, govern the field
         values as much as the prose. The prose SECTIONS are simply never asked
         for here, so the model has one job.
+
+        `report` is the prose pass's output, handed over as a reading aid. The
+        fields that come back empty most often — what was diagnosed, what was
+        changed, what is still open — are exactly the ones the report has just
+        written out under headings, so finding them there is a far shorter walk
+        than hunting through the dialogue. The transcript still follows it and
+        is still the authority: a summary omits, and a field must not inherit
+        the omission.
         """
         diarisation_note, notes_context, language_instruction = self._prompt_context(
             transcript, language, notes)
+        report_context = ""
+        if report and report.strip():
+            report_context = (
+                "REPORT — a summary of this same call, written moments ago from "
+                "the transcript below. Use it to find things quickly. Where the "
+                "two differ, or where the report is silent, the TRANSCRIPT "
+                "decides.\n\n"
+                f"{report.strip()}\n\n"
+            )
         return (
             f"{diarisation_note}{notes_context}{template_prompt.strip()}"
             f"{fields_instruction}\n\n"
             "Base your answer only on what was explicitly discussed."
-            f"{language_instruction}\n\nTRANSCRIPT:\n{transcript}"
+            f"{language_instruction}\n\n{report_context}TRANSCRIPT:\n{transcript}"
         )
 
     def complete_json(self, prompt: str) -> str:
@@ -1576,11 +1593,11 @@ TRANSCRIPT:
 
     def extract_fields_json(self, transcript: str, template_prompt: str,
                             fields_instruction: str, language: str = "en",
-                            notes: str = None) -> str:
+                            notes: str = None, report: str = None) -> str:
         """The data pass. Returns the model's raw reply; parsing is the caller's."""
         transcript = _strip_leading_timestamps(transcript)
         prompt = self._create_fields_prompt(
-            transcript, template_prompt, fields_instruction, language, notes)
+            transcript, template_prompt, fields_instruction, language, notes, report)
         return self.complete_json(prompt)
 
     def _stream_direct(self, prompt: str):

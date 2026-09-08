@@ -24,6 +24,7 @@ class _FakeSummarizer:
         self.data_calls = 0
         self.last_template_prompt = ""
         self.last_fields_instruction = ""
+        self.last_report = None
 
     def _split(self):
         text = "".join(self._chunks)
@@ -40,9 +41,10 @@ class _FakeSummarizer:
         yield self._split()[1]
 
     def extract_fields_json(self, transcript, template_prompt, fields_instruction,
-                            language="en", notes=None):
+                            language="en", notes=None, report=None):
         self.data_calls += 1
         self.last_fields_instruction = fields_instruction
+        self.last_report = report
         return self._data if self._data is not None else self._split()[0]
 
 
@@ -232,6 +234,20 @@ class DeclaredFieldsTests(unittest.TestCase):
             content = sc["reports"][0]["content"]
             self.assertFalse(content.startswith("---"))   # prose only
             self.assertIn("no json here", content)
+
+    def test_the_data_pass_receives_the_prose_report(self):
+        """The hybrid: fields are read from the report AND the transcript, so
+        the report the prose pass produced has to reach the data pass."""
+        with tempfile.TemporaryDirectory() as tmp:
+            c, _ = _cfg_with_fields(tmp)
+            mp = Path(tmp) / "m_summary.md"
+            mp.write_text("---\n---\n\n## Summary\nx\n", encoding="utf-8")
+            fake = _FakeSummarizer(['```json\n{"client": "X"}\n```\n\n'
+                                    '## Zusammenfassung\nEs ging um den Zugriff.\n'])
+            simple_recorder.generate_default_template_report(
+                mp, "T: hi", None, "en", 1, c, fake)
+            self.assertIn("Es ging um den Zugriff.", fake.last_report)
+            self.assertEqual(fake.data_calls, 1)
 
     def test_template_without_fields_is_unchanged(self):
         with tempfile.TemporaryDirectory() as tmp:
