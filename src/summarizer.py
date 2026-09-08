@@ -168,9 +168,11 @@ def build_fields_instruction(fields: list) -> str:
         "```json\n{\n" + skeleton + "\n}\n```\n\n"
         "What each key means:\n\n" + meanings + "\n\n"
         "It must be valid JSON: double-quoted keys and strings, no comments, no "
-        "trailing commas. Leave a value at null (or [] for a list) when the call "
-        "did not establish it — never guess to fill a field. Dates are "
-        "YYYY-MM-DD. After the closing ``` write the prose report."
+        "trailing commas. Quote every value that is not null, true or false — "
+        "including one that looks like a number or a time, such as 0:45, which "
+        "is not valid JSON unquoted. Leave a value at null (or [] for a list) "
+        "when the call did not establish it — never guess to fill a field. "
+        "Dates are YYYY-MM-DD. After the closing ``` write the prose report."
     )
 
 
