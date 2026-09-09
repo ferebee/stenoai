@@ -1555,6 +1555,20 @@ TRANSCRIPT:
             f"{language_instruction}\n\n{report_context}TRANSCRIPT:\n{transcript}"
         )
 
+    def _data_pass_kwargs(self) -> Dict[str, Any]:
+        """Request kwargs for the data pass — the configured sampling, forced to
+        temperature 0.
+
+        Extraction is a lookup, not a composition: there is one right answer for
+        what was changed on the call, and sampling around it only loses fields.
+        Observed directly — at temperature 0.2 a run dropped `diagnosed` that
+        the same prompt returned reliably at 0. The prose pass keeps whatever
+        temperature is configured, because writing readable German is the half
+        that benefits from it. Splitting the passes is what makes it possible to
+        ask for both.
+        """
+        return {**self._cloud_kwargs(), "temperature": 0}
+
     def complete_json(self, prompt: str) -> str:
         """One NON-streaming completion, in JSON mode where the provider has one.
 
@@ -1567,7 +1581,7 @@ TRANSCRIPT:
                     model=self.model_name,
                     messages=[{"role": "user", "content": prompt}],
                     response_format={"type": "json_object"},
-                    **self._cloud_kwargs(),
+                    **self._data_pass_kwargs(),
                 )
                 return (response.choices[0].message.content or "").strip()
             except Exception as e:
@@ -1582,7 +1596,7 @@ TRANSCRIPT:
                 response = self.client.chat(
                     model=self.model_name,
                     messages=[{"role": "user", "content": prompt}],
-                    options=self._ollama_options(),
+                    options={**(self._ollama_options() or {}), "temperature": 0},
                     format="json",
                 )
                 return (response.get("message", {}).get("content", "") or "").strip()
