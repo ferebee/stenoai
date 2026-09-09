@@ -3,6 +3,7 @@ import ReactMarkdown, { type ExtraProps } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { CHART_COPY, parseChatChart } from '@/lib/chatChart';
 import { ChartErrorBoundary } from '@/components/ChartErrorBoundary';
+import yaml from 'js-yaml';
 
 const ChatChart = React.lazy(() => import('@/components/ChatChart'));
 const MarkdownSource = React.createContext('');
@@ -101,5 +102,94 @@ export function renderMarkdown(text: string): React.ReactNode {
         </ReactMarkdown>
       </div>
     </MarkdownSource.Provider>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Report front matter
+// ---------------------------------------------------------------------------
+
+// A template that declares fields produces a report whose content OPENS with
+// YAML front matter. Markdown has no concept of it, so a renderer handed the
+// whole document turns `---` into a horizontal rule and collapses the keys into
+// one run-on paragraph — which is what the report view did.
+//
+// Keys Steno already shows in its own header are dropped here rather than
+// repeated: the date and duration sit in the meeting chrome a few pixels above.
+const HEADER_DUPLICATE_KEYS = new Set(['date', 'duration_seconds', 'duration', 'language']);
+
+export type ReportProperty = [string, unknown];
+
+/**
+ * Split leading YAML front matter from a report.
+ *
+ * Parsed with js-yaml rather than by hand. Three hand-rolled front matter
+ * parsers in this codebase each mangled a different real value — a colon in a
+ * title, a list item that looked like a key — and a real loader has none of
+ * those edges.
+ *
+ * Returns no properties for ordinary reports, which have no front matter, so
+ * the caller renders exactly what it always did.
+ */
+export function splitFrontmatter(text: string): { properties: ReportProperty[]; body: string } {
+  const empty = { properties: [] as ReportProperty[], body: text ?? '' };
+  if (!text || !text.startsWith('---\n')) return empty;
+  const end = text.indexOf('\n---', 3);
+  if (end === -1) return empty;
+  const raw = text.slice(4, end + 1);
+  const body = text.slice(end + 4).replace(/^\n+/, '');
+  let parsed: unknown;
+  try {
+    parsed = yaml.load(raw);
+  } catch {
+    // Unparseable front matter is left in the body rather than thrown away:
+    // showing it badly beats losing it silently.
+    return empty;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return empty;
+  const properties = Object.entries(parsed as Record<string, unknown>).filter(
+    ([k, v]) => !HEADER_DUPLICATE_KEYS.has(k) && v !== null && v !== undefined && v !== '' &&
+      !(Array.isArray(v) && v.length === 0),
+  );
+  return { properties, body };
+}
+
+function PropertyValue({ value }: { value: unknown }): React.ReactElement {
+  if (Array.isArray(value)) {
+    return (
+      <div className="flex flex-col gap-0.5">
+        {value.map((v, i) => (
+          <div key={i}>{String(v)}</div>
+        ))}
+      </div>
+    );
+  }
+  if (typeof value === 'boolean') return <span>{value ? 'yes' : 'no'}</span>;
+  return <span>{String(value)}</span>;
+}
+
+/** The structured half of a report, as a compact key/value header. */
+export function ReportProperties({ properties }: { properties: ReportProperty[] }): React.ReactElement | null {
+  if (!properties.length) return null;
+  return (
+    <dl
+      className="mb-4 grid gap-x-4 gap-y-1 rounded-lg px-3 py-2.5 text-[13px]"
+      style={{
+        gridTemplateColumns: 'minmax(6rem, max-content) 1fr',
+        background: 'var(--surface-raised)',
+        border: '1px solid var(--border-subtle)',
+      }}
+      data-testid="report-properties"
+    >
+      {properties.map(([key, value]) => (
+        <React.Fragment key={key}>
+          <dt style={{ color: 'var(--fg-2)' }}>{key}</dt>
+          <dd className="min-w-0" style={{ color: 'var(--fg-1)' }}>
+            <PropertyValue value={value} />
+          </dd>
+        </React.Fragment>
+      ))}
+    </dl>
   );
 }

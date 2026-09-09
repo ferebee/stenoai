@@ -87,7 +87,7 @@ import { buildNotesHtml, hasNotesContent } from '@/lib/notesPdf';
 import { unwrap } from '@/lib/result';
 import { cn } from '@/lib/utils';
 import { navigate } from '@/lib/router';
-import { stripReasoning } from '@/lib/markdown';
+import { ReportProperties, splitFrontmatter, stripReasoning } from '@/lib/markdown';
 import { pendingTitleRegens, streamCache, type StreamPhase } from '@/lib/meetingDetailState';
 import { useReprocessBridge } from '@/hooks/reprocessBridgeStore';
 import { useRecording } from '@/hooks/useRecording';
@@ -610,8 +610,18 @@ function DetailContent({
   // built lazily on click in saveNotesPdf, not on every render. An open report
   // counts on its own: a transcript-only note (auto-summarise off) has no
   // structured sections but can still have a generated report on screen.
+  // A template that declares fields produces a report whose content OPENS with
+  // YAML front matter. Markdown has no concept of it: fed to react-markdown the
+  // delimiters become horizontal rules and the keys collapse into one run-on
+  // paragraph. Split once here, and both the view and the PDF render the same
+  // two halves.
+  const reportParts = React.useMemo(
+    () => splitFrontmatter(activeReport ? stripReasoning(activeReport.content) : ''),
+    [activeReport],
+  );
+
   const canExportNotesPdf = activeReport
-    ? Boolean(stripReasoning(activeReport.content).trim())
+    ? Boolean(reportParts.body.trim() || reportParts.properties.length)
     : hasNotesContent(noteSections);
 
   // Branded-PDF export of whichever note is on screen — the open template
@@ -627,7 +637,10 @@ function DetailContent({
         ? {
             templateName: activeReport.template_name,
             contentHtml: renderToStaticMarkup(
-              <ReactMarkdown>{stripReasoning(activeReport.content)}</ReactMarkdown>,
+              <>
+                <ReportProperties properties={reportParts.properties} />
+                <ReactMarkdown>{reportParts.body}</ReactMarkdown>
+              </>,
             ),
           }
         : null;
@@ -1174,7 +1187,8 @@ function DetailContent({
               data-testid="report-content"
               style={{ color: 'var(--fg-1)', maxWidth: '72ch' }}
             >
-              <ReactMarkdown>{stripReasoning(activeReport.content)}</ReactMarkdown>
+              <ReportProperties properties={reportParts.properties} />
+              <ReactMarkdown>{reportParts.body}</ReactMarkdown>
             </section>
           ) : (
             <div className="flex flex-col gap-9">
