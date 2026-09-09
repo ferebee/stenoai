@@ -1869,5 +1869,48 @@ class ConfigPersonProfileTests(unittest.TestCase):
             self.assertIn(newest["prototype_id"], {item["prototype_id"] for item in retained})
 
 
+
+class DataTemperatureTests(unittest.TestCase):
+    """The data pass has its own temperature: the two passes are different jobs."""
+
+    def _cfg(self, tmp):
+        return Config(config_path=Path(tmp) / "config.json")
+
+    def test_defaults_to_zero(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(self._cfg(tmp).get_data_temperature(), 0.0)
+
+    def test_set_and_read_back(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            c = self._cfg(tmp)
+            self.assertTrue(c.set_data_temperature(0.3))
+            self.assertAlmostEqual(c.get_data_temperature(), 0.3)
+            self.assertAlmostEqual(self._cfg(tmp).get_data_temperature(), 0.3)
+
+    def test_none_restores_the_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            c = self._cfg(tmp)
+            c.set_data_temperature(1.0)
+            c.set_data_temperature(None)
+            self.assertEqual(c.get_data_temperature(), 0.0)
+
+    def test_clamped_and_junk_falls_back(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            c = self._cfg(tmp)
+            c.set_data_temperature(9)
+            self.assertEqual(c.get_data_temperature(), 2.0)
+            self.assertFalse(c.set_data_temperature("warm"))
+            c._config["data_temperature"] = "warm"
+            self.assertEqual(c.get_data_temperature(), 0.0)
+
+    def test_independent_of_the_prose_temperature(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            c = self._cfg(tmp)
+            c.set_cloud_temperature(0.3)
+            c.set_data_temperature(0.0)
+            self.assertAlmostEqual(c.get_cloud_temperature(), 0.3)
+            self.assertEqual(c.get_data_temperature(), 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2640,6 +2640,36 @@ class Config:
                 return False
         return self._save()
 
+    def get_data_temperature(self):
+        """Sampling temperature for a template's DATA pass. Default 0.
+
+        Separate from cloud_temperature because the two passes are different
+        jobs. Writing a readable German report benefits from some sampling; the
+        data pass is a lookup, where the right answer for each field is already
+        the likeliest token and exploring around it only invents. Measured on a
+        real call: 0 and 0.2 gave identical fields across nine runs, and 0.3
+        produced a client name for a call in which nobody was named.
+
+        Configurable rather than fixed because that measurement is one call on
+        one model, and the next answer should come from data too.
+        """
+        value = self._config.get("data_temperature", 0.0)
+        try:
+            return max(0.0, min(2.0, float(value)))
+        except (TypeError, ValueError):
+            return 0.0
+
+    def set_data_temperature(self, temperature) -> bool:
+        """Set the data-pass temperature; None restores the default of 0."""
+        if temperature is None:
+            self._config.pop("data_temperature", None)
+        else:
+            try:
+                self._config["data_temperature"] = max(0.0, min(2.0, float(temperature)))
+            except (TypeError, ValueError):
+                return False
+        return self._save()
+
     def get_adapter_url(self) -> str:
         """Get the org adapter base URL (set by Electron when a session is
         active). The summariser uses this when ai_provider == 'adapter' to
