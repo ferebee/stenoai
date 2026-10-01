@@ -180,6 +180,9 @@ config/
 *.env
 *_config.json
 config.json
+# ...and the lock Config._save writes beside it, which appears whenever the
+# backend is run with STENOAI_USER_DATA_DIR pointing at a working copy.
+config.json.lock
 !app/package*.json
 
 # Local documentation and review notes
