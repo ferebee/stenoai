@@ -1,7 +1,10 @@
 # This fork, against upstream
 
-Base: **upstream v0.7.0**. Branch: `feat/template-fields`, 26 commits.
-Known-good tag: `callwatch-build-2026-09-09` — the build in daily use.
+Base: **upstream v0.8.0** (rebased 2026-10-03). Branch: `feat/template-fields`,
+26 commits plus this document.
+Known-good tag: `callwatch-build-2026-09-09` — the v0.7.0-based build in daily
+use, kept until a v0.8.0 build has proven itself on a real call. The branch as
+it was before the rebase is `backup/template-fields-v0.7.0`.
 
 Steno is the mechanism. The policy lives in a separate project directory
 (`../Callwatch-Claude`): the template, the Obsidian CSS snippet, the tools, and
@@ -25,18 +28,24 @@ is linear, but it is not one change.
 
 ### 1. Auto-record — LOCAL ONLY
 
-    512f961  Add opt-in auto-record for detected meetings       app/main.js
+    dc92eb5  Add opt-in auto-record for detected meetings       app/main.js
 
 Starts recording when Steno's own meeting detector fires, instead of showing a
 notification. Deliberately not for upstream: it is a behavioural preference,
 and it is the single change in `app/main.js`, which upstream edits constantly.
-Expect this to be the only real conflict on any rebase.
+
+It has not conflicted yet. Upstream's 0.8.0 rewrote large parts of `main.js`
+(+635/−87) and left the detection block untouched: `handleMicEvent`,
+`requestAutoRecord`, the notification path and the auto-stop timers are
+byte-identical to 0.7.0. The setting is read straight from `config.json`, which
+upstream's config layer loads and saves as a whole dict, so an unknown key
+survives every save.
 
 ### 2. Front matter correctness — UPSTREAM CANDIDATE, send first
 
-    b7b54ad  parse with a real YAML loader in both readers
-    d7fae2c  preserve keys the save paths do not own
-    c6bd6a5  parse front matter with a real YAML loader here too
+    6f0d77b  parse with a real YAML loader in both readers
+    d1d86c8  preserve keys the save paths do not own
+    c7fa0be  parse front matter with a real YAML loader here too
 
 Three hand-rolled front matter parsers existed, in `app/main.js`,
 `src/report_store.py` and `app/obsidian-sync.js`. Each mangled a different real
@@ -50,23 +59,29 @@ to carry through every future rebase.
 
 ### 3. Obsidian export of the active report — UPSTREAM CANDIDATE
 
-    b7a514c  export the active template report, not just the Standard note
+    3baea6e  export the active template report, not just the Standard note
 
 The sync exported the Standard note even when a template report was the one on
 screen. Independent of everything else here.
 
 ### 4. Configurable sampling temperature — UPSTREAM CANDIDATE
 
-    0255556  allow a configured sampling temperature
-    9575988  give the data pass its own temperature setting
+    ff774f5  allow a configured sampling temperature
+    2687ff4  give the data pass its own temperature setting
 
 Steno omitted the parameter entirely, taking each server's default — typically
 around 0.7, which is high for a task that is mostly extraction. Now
 configurable, and the two passes are configured separately (see group 6).
 
+The setting works by adding `**self._cloud_kwargs()` to each OpenAI-compatible
+call, so a call site upstream adds later silently lacks it. That happened in
+0.8.0: query streaming moved into a new `stream_chat_prompt`, and the rebase
+had to carry the kwargs there by hand. After any rebase, check every
+`cloud_client.chat.completions.create` in `src/summarizer.py`.
+
 ### 5. Report front matter rendering — UPSTREAM CANDIDATE
 
-    6b43fd8  render a report's front matter as properties, not as prose
+    329f7b5  render a report's front matter as properties, not as prose
 
 react-markdown has no concept of front matter, so a report opening with `---`
 rendered as a horizontal rule followed by every key collapsed into one run-on
@@ -76,31 +91,37 @@ Worth upstreaming on its own merit rather than as part of the feature below: a
 user-written markdown template can ask for YAML front matter in stock Steno
 today, and it renders as garbage.
 
+Not submittable as it stands: `npm run lint:i18n` fails on it, because
+`PropertyValue` renders the literal strings `'yes'` and `'no'`. Upstream's
+gate allows zero hardcoded strings in `markdown.tsx`. Route them through
+`t()` before cutting a submission branch. (The fork has failed this gate since
+the commit landed; the rebase did not cause it.)
+
 ### 6. Declared fields — THE FEATURE, discuss before building a PR
 
-    ec67294  declared fields become YAML front matter on the report
-    464ed05  allow a declared 'title' field, reserve the derived keys
-    698a2af  extract declared fields on every report path
-    4370045  reports carry complete front matter, and may name the meeting
-    145d8f4  omit fields with nothing established
-    6c9f04c  show the model real JSON, and accept a mislabelled fence
-    373d17f  report a malformed fields declaration instead of ignoring it
-    1cca751  allow hyphens in declared field names
-    a6d8acc  Revert "allow hyphens in declared field names"
-    9f5e5d0  record why declared field names are snake_case
-    68fd236  never send a rejected fields declaration to the model
-    5bd6d7e  carry a readable duration beside the seconds
-    1352bf1  a JSON skeleton placeholder must mean "not established"
-    b20bf8e  tell the model to quote time-shaped values
-    0dddc7a  split a template report into a data pass and a prose pass
-    08a8f0c  the data pass reads the report as well as the transcript
-    00f3366  run the data pass at temperature 0
+    7ca70c2  declared fields become YAML front matter on the report
+    884d389  allow a declared 'title' field, reserve the derived keys
+    79b9fe6  extract declared fields on every report path
+    42c8ff3  reports carry complete front matter, and may name the meeting
+    e493c6f  omit fields with nothing established
+    eddd707  show the model real JSON, and accept a mislabelled fence
+    7f1265a  report a malformed fields declaration instead of ignoring it
+    f189fc6  allow hyphens in declared field names
+    e051e36  Revert "allow hyphens in declared field names"
+    2d208c9  record why declared field names are snake_case
+    ba496bf  never send a rejected fields declaration to the model
+    2194100  carry a readable duration beside the seconds
+    d172f6b  a JSON skeleton placeholder must mean "not established"
+    d7b5d87  tell the model to quote time-shaped values
+    a33e3ee  split a template report into a data pass and a prose pass
+    3edd7ad  the data pass reads the report as well as the transcript
+    be78e59  run the data pass at temperature 0
 
 Large and opinionated. Before investing in a clean PR, open an issue and find
 out whether maintainers want the mechanism at all. A fork carrying this
 indefinitely is a perfectly stable outcome.
 
-Note for whoever extracts this: `1cca751` and `a6d8acc` are a feature and its
+Note for whoever extracts this: `f189fc6` and `e051e36` are a feature and its
 revert. That is honest history for us and noise for a reviewer — a submission
 branch should be recomposed, not cherry-picked verbatim.
 
@@ -149,7 +170,7 @@ German is the half that benefits from sampling.
 **Front matter keys are snake_case, enforced.** Hyphens are valid YAML, JSON and
 Obsidian property names and read better in a properties panel — but a bare
 `next-steps` in a Dataview or Bases expression parses as subtraction. See
-`1cca751`/`a6d8acc` for the full detour.
+`f189fc6`/`e051e36` for the full detour.
 
 ---
 
@@ -180,16 +201,53 @@ description is prose the model may ignore; nothing enforces it.
 
 ## Rebasing onto a new upstream
 
-    git rebase --onto <new-tag> v0.7.0 feat/template-fields
+    git rebase --onto <new-tag> <old-tag> feat/template-fields
 
-Conflict cost is concentrated where upstream edits the same files. Measured
-across upstream's 0.7.x line: `src/summarizer.py`, `src/templates.py` and
-`app/obsidian-sync.js` saw **zero** upstream commits, `simple_recorder.py` four,
-`app/renderer/.../MeetingDetail.tsx` three, and `app/main.js` **nine** — which
-is group 1, the one-file local-only change.
+Do a trial run first, in a throwaway detached worktree, and resolve every
+conflict there. Then rebase for real and take each resolution from the trial
+commit, checking that `git write-tree` matches the trial commit's tree before
+continuing. Finish with `git range-diff`: every commit should be `=` against
+the trial.
 
-The lesson generalises: additive code is cheap to carry. `src/templates.py` is a
-new file and its conflict surface is zero by construction.
+**Predictions from history were wrong once already.** Across 0.7.x,
+`src/summarizer.py` saw zero upstream commits and `app/main.js` nine, so the
+forecast was "main.js is the only real conflict". In fact `main.js` merged
+cleanly and the conflicts were elsewhere.
+
+### v0.7.0 → v0.8.0, measured
+
+25 upstream commits. 11 of the 22 files this branch touches changed upstream.
+Four of 26 commits stopped:
+
+| Commit | File | What happened | Resolution |
+|---|---|---|---|
+| `6f0d77b` YAML loader | `app/package-lock.json` | Version string only. Our change to the lockfile in this commit was a stale 0.6.7→0.7.0 bump that upstream had since fixed | Take upstream's file. Never regenerate it with a different npm: npm 11 rewrote ~30 unrelated `peer` flags |
+| `d1d86c8` preserve keys | `simple_recorder.py` | Comment only. Upstream's reprocess now also drops `notes_stale`, which `_OWNED_FRONTMATTER_KEYS` already lists | Our code, upstream's comment |
+| `ff774f5` temperature | `src/summarizer.py` | Upstream moved query streaming into `stream_chat_prompt` | Upstream's code, plus `**self._cloud_kwargs()` on its OpenAI call (see group 4) |
+| `329f7b5` front matter render | `markdown.tsx`, `markdown.test.ts` | Upstream replaced the hand-rolled chat renderer with react-markdown, deleting the code our additions were anchored to | Upstream's file plus `import yaml from 'js-yaml'` (not `cn`, which upstream removed); both `describe` blocks, closing braces placed by hand |
+
+The other 22 applied unchanged. Checked after the rebase, because they merge
+silently if broken:
+
+- every front matter writer still goes through `_merge_preserved_frontmatter`,
+  and upstream added no new writers or hand-rolled parsers;
+- both report paths still call `apply_declared_fields`;
+- the data pass carries `_data_pass_kwargs` (temperature 0) and the prose pass
+  `_cloud_kwargs`;
+- `config.json` round-trips unknown keys, so `auto_record_meetings_enabled`,
+  `cloud_temperature` and `data_temperature` survive.
+
+Tests, rebased tree against plain v0.8.0 in the same environment: pytest 1480
+passed against 1435, `node --test` 581 against 578, vitest 282 against 276,
+and no new failures. Each difference is exactly this branch's tests (45, 3, 6).
+With `bin/` populated, as in the real checkout, four more pytest tests run
+(1484) and the five `node --test` failures that need `steno-audio-encode`
+pass (586/586).
+
+The lesson still holds: additive code is cheap to carry. `src/templates.py`,
+`src/report_store.py` and `app/obsidian-sync.js`, which upstream did not touch
+in 0.8.0, cost nothing. What conflicted was code that edits upstream's own
+functions in place, or appends next to code upstream later deletes.
 
 Afterwards: rebuild (`../Callwatch-Claude/BUILDING-STENO.md`, and read its
 toolchain-shadowing section — MacPorts and conda shadow Apple's tools and break
