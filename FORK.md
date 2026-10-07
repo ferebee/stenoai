@@ -1,10 +1,11 @@
 # This fork, against upstream
 
 Base: **upstream v0.8.0** (rebased 2026-10-03). Branch: `feat/template-fields`,
-26 commits plus this document.
-Known-good tag: `callwatch-build-2026-09-09` — the v0.7.0-based build in daily
-use, kept until a v0.8.0 build has proven itself on a real call. The branch as
-it was before the rebase is `backup/template-fields-v0.7.0`.
+27 commits plus this document.
+Known-good tag: `callwatch-build-2026-10-03` — the v0.8.0-based build that
+passed a real call. The v0.7.0-based `callwatch-build-2026-09-09` is the older
+fallback. The branch as it was before the rebase is
+`backup/template-fields-v0.7.0`.
 
 Steno is the mechanism. The policy lives in a separate project directory
 (`../Callwatch-Claude`): the template, the Obsidian CSS snippet, the tools, and
@@ -21,7 +22,7 @@ auto-record, and the bug fixes found along the way.
 
 ---
 
-## The six groups
+## The seven groups
 
 Listed oldest first. The grouping is what matters for upstreaming — the branch
 is linear, but it is not one change.
@@ -124,6 +125,24 @@ indefinitely is a perfectly stable outcome.
 Note for whoever extracts this: `f189fc6` and `e051e36` are a feature and its
 revert. That is honest history for us and noise for a reviewer — a submission
 branch should be recomposed, not cherry-picked verbatim.
+
+### 7. Recording recovery after a write error — UPSTREAM CANDIDATE
+
+    7453538  recover the recording when the write stream errors   app/main.js
+
+If the system-audio WriteStream errors mid-recording (ENOSPC, EIO), the stream
+handler cleared the file path along with the stream, so `close()` reported "no
+open file", nothing was queued, and the whole meeting sat orphaned in
+`recordings/`. The fix keeps the path in failed-* slots and hands the
+truncated WebM (still decodable) to processing; the renderer's "Recording may be
+incomplete" notice is unchanged. Still present upstream in 0.8.0.
+
+Written in September against 0.7.x (branch `fix/sysaudio-write-error-orphan`,
+which is now stale) and ported to 0.8.0 on 2026-10-07. Only the test list in
+`package.json` conflicted. 0.8.0's new `activeSysAudioSummaryFile` is not
+cleared by the error handler, so the recovered audio and its note still pair
+up. Its three tests pass, and the full unit suite (589 node, 282 vitest) passes
+with it.
 
 ---
 
