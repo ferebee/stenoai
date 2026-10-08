@@ -8929,6 +8929,24 @@ def repair_speaker_profiles(apply_changes):
     }, indent=2))
 
 
+@cli.command(name='get-caller-id')
+def get_caller_id():
+    """Get whether caller recognition (iMCP, macOS) is on."""
+    from src.config import get_config
+    print(json.dumps({"success": True, "caller_id_enabled": get_config().get_caller_id_enabled()}))
+
+
+@cli.command(name='set-caller-id')
+@click.argument('enabled', type=bool)
+def set_caller_id(enabled):
+    """Turn caller recognition (iMCP, macOS) on or off (True/False)."""
+    from src.config import get_config
+    if get_config().set_caller_id_enabled(enabled):
+        print(json.dumps({"success": True, "caller_id_enabled": enabled}))
+    else:
+        print(json.dumps({"success": False, "error": "Failed to save config"}))
+
+
 @cli.command()
 def get_notifications():
     """Get the current notification preference"""

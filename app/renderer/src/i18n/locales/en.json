@@ -91,5 +91,18 @@
   "noteShare.notesPdf": "Share notes as PDF…",
   "noteShare.notesMarkdown": "Share notes as .md…",
   "noteShare.transcript": "Share transcript…",
-  "noteShare.saveNotesMarkdown": "Save notes as .md…"
+  "noteShare.saveNotesMarkdown": "Save notes as .md…",
+  "settings.general.callerId.label": "Identify phone callers",
+  "settings.general.callerId.description": "Add the caller to notes of phone and FaceTime calls, by Contacts name or by number. Uses the free iMCP app to read this Mac's call history and Contacts; nothing leaves your Mac.",
+  "settings.general.callerId.status.notInstalled": "Install iMCP to use this.",
+  "settings.general.callerId.status.notRunning": "Open iMCP to continue.",
+  "settings.general.callerId.status.awaitingApproval": "Allow Steno in the iMCP window.",
+  "settings.general.callerId.status.declined": "iMCP refused Steno. Turn this off and on to ask again.",
+  "settings.general.callerId.status.phoneOff": "Turn on Phone in iMCP.",
+  "settings.general.callerId.status.noContacts": "Ready. Turn on Contacts in iMCP to see names, not only numbers.",
+  "settings.general.callerId.status.ready": "Ready.",
+  "settings.general.callerId.status.needsMeetingDetection": "Turn on Auto-detected meetings: it is how Steno notices a call.",
+  "settings.general.callerId.getImcp": "Get iMCP",
+  "settings.general.callerId.homebrewHint": "Or with Homebrew: {{command}}",
+  "settings.general.callerId.loadError": "Could not load the caller setting. Try again."
 }

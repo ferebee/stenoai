@@ -1652,6 +1652,12 @@ function install({ ipcMain }) {
     // switches permanently disabled under mock IPC.
     'get-menu-bar-icon': { success: true, show_menu_bar_icon: true },
     'get-premeeting-notifications': { success: true, premeeting_notifications_enabled: true },
+    // Caller recognition row: macOS-shaped and off, so T1 renders the switch.
+    'get-caller-id': {
+      success: true, supported: true, caller_id_enabled: false, meeting_detection: true,
+      status: { state: 'off', contacts: false },
+      download_url: 'https://imcp.app/download', homebrew: 'brew install --cask mattt/tap/iMCP',
+    },
     // Global record shortcut toggle (GeneralTab's "Global record shortcut"
     // row + the hero copy). Default enabled + registered so T1 renderer specs
     // render the ON state without a real globalShortcut registration.

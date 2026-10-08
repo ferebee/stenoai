@@ -1,5 +1,6 @@
+import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ipc, type TelemetryToggleSource } from '@/lib/ipc';
+import { ipc, type GetCallerIdResponse, type TelemetryToggleSource } from '@/lib/ipc';
 import { unwrap } from '@/lib/result';
 
 export const settingsKeys = {
@@ -13,6 +14,7 @@ export const settingsKeys = {
   systemAudio: () => [...settingsKeys.all, 'systemAudio'] as const,
   systemAudioSupport: () => [...settingsKeys.all, 'systemAudioSupport'] as const,
   autoDetectMeetings: () => [...settingsKeys.all, 'autoDetectMeetings'] as const,
+  callerId: () => [...settingsKeys.all, 'callerId'] as const,
   premeetingNotifications: () => [...settingsKeys.all, 'premeetingNotifications'] as const,
   launchOnLogin: () => [...settingsKeys.all, 'launchOnLogin'] as const,
   silenceAutoStop: () => [...settingsKeys.all, 'silenceAutoStop'] as const,
@@ -223,6 +225,32 @@ export function useSetAutoDetectMeetings() {
   return useToggleSetting(settingsKeys.autoDetectMeetings(), async (v) =>
     unwrap(await ipc().settings.setAutoDetectMeetings(v)),
   );
+}
+
+type CallerIdSettings = Extract<GetCallerIdResponse, { success: true }>;
+
+/** Caller recognition (iMCP): the setting plus iMCP's live status. */
+export function useCallerIdSetting() {
+  const qc = useQueryClient();
+  // iMCP's status changes on its own (started, approved, Phone switched on),
+  // so refetch whenever main reports a change rather than polling.
+  useEffect(
+    () => ipc().on.callerIdStatus(() => qc.invalidateQueries({ queryKey: settingsKeys.callerId() })),
+    [qc],
+  );
+  return useQuery({
+    queryKey: settingsKeys.callerId(),
+    queryFn: async (): Promise<CallerIdSettings> => unwrap(await ipc().settings.getCallerId()),
+  });
+}
+
+export function useSetCallerId() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: boolean): Promise<CallerIdSettings> =>
+      unwrap(await ipc().settings.setCallerId(v)),
+    onSuccess: (settings) => qc.setQueryData(settingsKeys.callerId(), settings),
+  });
 }
 
 export function usePremeetingNotificationsSetting() {
