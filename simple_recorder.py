@@ -1495,6 +1495,7 @@ def process_streaming(audio_file, name, notes, live_transcript, append_to):
                 md_lines.append('')
                 md_lines.append(notes_text)
             _atomic_write_text(summary_path, '\n'.join(md_lines))
+            _add_callers_to_participants(recorder.output_dir, audio_path.stem)
 
             # Before the audio is deleted below: the sidecar is the only
             # place these embeddings survive, and this gate is about
@@ -1515,6 +1516,7 @@ def process_streaming(audio_file, name, notes, live_transcript, append_to):
         # Step 2: Stream summary
         if recorder.summarizer is None:
             recorder.summarizer = OllamaSummarizer()
+        _set_call_context(recorder.summarizer, recorder.output_dir, Path(audio_file).stem)
 
         from src.config import get_config
         config = get_config()
@@ -1612,6 +1614,7 @@ def process_streaming(audio_file, name, notes, live_transcript, append_to):
             md_lines.append('')
             md_lines.append(notes_text)
         _atomic_write_text(summary_path, '\n'.join(md_lines))
+        _add_callers_to_participants(recorder.output_dir, audio_path.stem)
         _write_original_snapshot(summary_path)
 
         # Persist the raw diarization clusters/embeddings this run already
@@ -3552,6 +3555,7 @@ def reprocess(summary_file, regenerate_title, retranscribe):
         if recorder.summarizer is None:
             from src.summarizer import OllamaSummarizer
             recorder.summarizer = OllamaSummarizer()
+        _set_call_context(recorder.summarizer, summary_path.parent, _summary_stem(summary_path))
 
         print("Generating summary...", flush=True)
         streamed_chunks = []
@@ -3707,6 +3711,7 @@ def reprocess(summary_file, regenerate_title, retranscribe):
             session_info.pop("notes_generated", None)
             session_info.pop("notes_stale", None)
             _atomic_write_text(summary_path, json.dumps(existing_data, indent=2))
+        _add_callers_to_participants(summary_path.parent, _summary_stem(summary_path))
 
         # Signal completion only AFTER the note file is fully written. The
         # renderer reads the note the instant it sees STREAM_COMPLETE, so
@@ -3746,6 +3751,42 @@ def _patch_summary_date(summary_path: Path, date_value: str) -> bool:
     tmp_path.write_text(patched, encoding="utf-8")
     tmp_path.replace(summary_path)
     return True
+
+
+@cli.command(name='apply-call-info')
+@click.argument('meeting_stem')
+@click.option('--calls', 'calls_json', required=True,
+              help='JSON list of the calls the recording captured, as the app found them through iMCP.')
+@click.option('--sidecar-only', is_flag=True, default=False,
+              help="Store the calls but leave the note alone: its processing is still running "
+                   "and reads them before it saves.")
+def apply_call_info(meeting_stem, calls_json, sidecar_only):
+    """Store the phone or FaceTime call a recording captured (src.call_info) and
+    add the caller to the note's Participants. macOS only, fed by app/main.js."""
+    from src.call_info import normalize_calls, write_calls
+    from src.config import get_data_dirs
+
+    if not meeting_stem or meeting_stem in ('.', '..') or '/' in meeting_stem or '\\' in meeting_stem:
+        print(json.dumps({"success": False, "error": "Invalid meeting stem."}))
+        sys.exit(1)
+    try:
+        calls = normalize_calls(json.loads(calls_json))
+    except ValueError:
+        print(json.dumps({"success": False, "error": "--calls is not valid JSON."}))
+        sys.exit(1)
+    if not calls:
+        print(json.dumps({"success": False, "error": "No usable call in --calls."}))
+        sys.exit(1)
+
+    output_dir = Path(get_data_dirs()["output"])
+    write_calls(output_dir, meeting_stem, calls)
+    note_updated = False
+    if not sidecar_only and any(
+        (output_dir / f"{meeting_stem}_summary{ext}").exists() for ext in ('.md', '.json')
+    ):
+        _add_callers_to_participants(output_dir, meeting_stem)
+        note_updated = True
+    print(json.dumps({"success": True, "calls": len(calls), "note_updated": note_updated}))
 
 
 @cli.command(name='full-reprocess')
@@ -4004,6 +4045,7 @@ def generate_report(summary_file, template_id):
     if recorder.summarizer is None:
         from src.summarizer import OllamaSummarizer
         recorder.summarizer = OllamaSummarizer()
+    _set_call_context(recorder.summarizer, summary_path.parent, _summary_stem(summary_path))
 
     print("Generating report...", flush=True)
     streamed_chunks = []
@@ -4091,6 +4133,7 @@ def regen_title(summary_file):
         if recorder.summarizer is None:
             from src.summarizer import OllamaSummarizer
             recorder.summarizer = OllamaSummarizer()
+        _set_call_context(recorder.summarizer, summary_path.parent, _summary_stem(summary_path))
 
         generated_title = recorder.summarizer.generate_title(summary, transcript, language=output_language)
         generated_title = _apply_chinese_variant(generated_title)
@@ -8111,6 +8154,39 @@ def _update_summary_transcript(
     return "updated"
 
 
+def _summary_stem(summary_path) -> str:
+    """The meeting stem of a `<stem>_summary.{md,json}` path."""
+    stem = Path(summary_path).stem
+    return stem[:-len('_summary')] if stem.endswith('_summary') else stem
+
+
+def _set_call_context(summarizer, output_dir, meeting_stem: str) -> None:
+    """Tell the summarizer who a phone or FaceTime recording was with
+    (src.call_info); clears it for a recording that captured no call."""
+    from src.call_info import meeting_context, read_calls
+    summarizer.meeting_context = meeting_context(read_calls(output_dir, meeting_stem))
+
+
+def _add_callers_to_participants(output_dir, meeting_stem: str) -> None:
+    """Put the recording's callers (src.call_info) into Participants, keeping
+    whoever is listed already. A no-op when the recording captured no call."""
+    from src.call_info import read_calls
+    if not read_calls(output_dir, meeting_stem):
+        return
+    output_dir = Path(output_dir)
+    json_path = output_dir / f"{meeting_stem}_summary.json"
+    md_path = output_dir / f"{meeting_stem}_summary.md"
+    current = []
+    try:
+        if json_path.exists():
+            current = json.loads(json_path.read_text(encoding="utf-8")).get("participants") or []
+        elif md_path.exists():
+            current = _parse_meeting_markdown(md_path).get("participants") or []
+    except (OSError, ValueError) as e:
+        logger.warning(f"Could not read participants for {meeting_stem}: {e}")
+    _update_summary_participants(output_dir, meeting_stem, current)
+
+
 def _update_summary_participants(
     output_dir: Path,
     meeting_stem: str,
@@ -8125,7 +8201,13 @@ def _update_summary_participants(
     stale sidecar) -- this is a best-effort enhancement on a successful
     confirm/rename/delete. Returns whether the existing Summary was safely
     updated or already current; a missing Summary is also a successful no-op.
+
+    A phone or FaceTime recording's callers (src.call_info) are always kept:
+    they are a fact about the recording, not a confirmed voice, so a rewrite
+    from the speaker side must not drop them.
     """
+    from src.call_info import read_calls, with_callers
+    participant_names = with_callers(read_calls(output_dir, meeting_stem), participant_names)
     json_path = output_dir / f"{meeting_stem}_summary.json"
     md_path = output_dir / f"{meeting_stem}_summary.md"
 

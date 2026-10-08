@@ -1,0 +1,127 @@
+"""The phone or FaceTime call a recording captured.
+
+macOS only. When a recording and the call it captured have both ended, the
+Electron app finds the call in the Mac's call history through iMCP
+(app/call-matching.js, app/imcp-client.js) and hands it over with the
+``apply-call-info`` command, which stores it next to the note:
+
+    <output>/<stem>_call.json
+    {"calls": [{"name": "Erika Mustermann", "number": "+12025550100",
+                "direction": "incoming", "service": "phone",
+                "started_at": "2026-03-02T14:00:00Z"}]}
+
+``name`` is the Contacts name and may be null; ``number`` may be null for a
+withheld number. That file is the source of truth and nothing else rewrites
+it. Two things are derived from it:
+
+- Participants: every caller is listed, by name or else by number, and
+  ``_update_summary_participants`` adds them back whenever the speaker side
+  rewrites the section, so reprocessing or confirming speakers cannot lose them.
+- Prompt context: the summary, report and title prompts are told who the call
+  was with (``OllamaSummarizer.meeting_context``).
+
+No voice data, no speaker confirmation, no analytics: the caller is a fact
+about the recording, not about anyone's voice.
+"""
+
+import json
+import logging
+from pathlib import Path
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+CALL_SIDECAR_SUFFIX = "_call.json"
+_DIRECTIONS = ("incoming", "outgoing")
+_SERVICES = {"phone": "phone call", "facetime": "FaceTime call"}
+_MAX_FIELD = 200
+
+
+def call_sidecar_path(output_dir, meeting_stem: str) -> Path:
+    return Path(output_dir) / f"{meeting_stem}{CALL_SIDECAR_SUFFIX}"
+
+
+def _text(value) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    value = " ".join(value.split())[:_MAX_FIELD]
+    return value or None
+
+
+def normalize_calls(raw) -> list:
+    """The valid calls in ``raw`` (a list, or ``{"calls": [...]}``); bad entries dropped."""
+    if isinstance(raw, dict):
+        raw = raw.get("calls")
+    if not isinstance(raw, list):
+        return []
+    calls = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        call = {
+            "name": _text(entry.get("name")),
+            "number": _text(entry.get("number")),
+            "direction": entry.get("direction") if entry.get("direction") in _DIRECTIONS else None,
+            "service": entry.get("service") if entry.get("service") in _SERVICES else None,
+            "started_at": _text(entry.get("started_at")),
+        }
+        if call["name"] or call["number"]:
+            calls.append(call)
+    return calls
+
+
+def read_calls(output_dir, meeting_stem: str) -> list:
+    """The calls stored for a recording, or [] when there are none or the file is unreadable."""
+    path = call_sidecar_path(output_dir, meeting_stem)
+    try:
+        return normalize_calls(json.loads(path.read_text(encoding="utf-8")))
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError) as e:
+        logger.warning(f"Could not read {path}: {e}")
+        return []
+
+
+def write_calls(output_dir, meeting_stem: str, calls: list) -> Path:
+    from src.config import _atomic_write_json
+    path = call_sidecar_path(output_dir, meeting_stem)
+    _atomic_write_json(path, {"calls": calls})
+    return path
+
+
+def caller_label(call: dict) -> Optional[str]:
+    """How a caller appears in Participants: the Contacts name, else the number."""
+    return call.get("name") or call.get("number")
+
+
+def with_callers(calls: list, participant_names: list) -> list:
+    """``participant_names`` with every caller not already in it, callers first."""
+    existing = {str(n).casefold() for n in participant_names or []}
+    callers = []
+    for call in calls:
+        label = caller_label(call)
+        if label and label.casefold() not in existing:
+            existing.add(label.casefold())
+            callers.append(label)
+    return callers + list(participant_names or [])
+
+
+def meeting_context(calls: list) -> str:
+    """The prompt preamble naming the other party, or "" when there was no call."""
+    if not calls:
+        return ""
+    sentences = []
+    for call in calls:
+        kind = _SERVICES.get(call.get("service"), "call")
+        if call.get("direction"):
+            kind = f"{call['direction']} {kind}"
+        article = "an" if kind[0] in "aeiou" else "a"
+        if call.get("name"):
+            who = call["name"] + (f" ({call['number']})" if call.get("number") else "")
+        else:
+            who = f"{call['number']}, a number not in the user's contacts"
+        sentences.append(f"This recording is {article} {kind} with {who}.")
+    sentences.append("[Others] in the transcript is the other party on the call.")
+    if any(call.get("name") for call in calls):
+        sentences.append("Refer to them by name.")
+    return "CALL: " + " ".join(sentences) + "\n\n"
