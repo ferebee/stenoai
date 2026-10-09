@@ -1,7 +1,7 @@
 # This fork, against upstream
 
 Base: **upstream v0.8.0** (rebased 2026-10-03). Branch: `feat/template-fields`,
-27 commits plus this document.
+28 commits plus this document.
 Known-good tag: `callwatch-build-2026-10-03` — the v0.8.0-based build that
 passed a real call. The v0.7.0-based `callwatch-build-2026-09-09` is the older
 fallback. The branch as it was before the rebase is
@@ -47,12 +47,32 @@ survives every save.
     6f0d77b  parse with a real YAML loader in both readers
     d1d86c8  preserve keys the save paths do not own
     c7fa0be  parse front matter with a real YAML loader here too
+    dcc99a3  let a duplicated key take its last value
 
 Three hand-rolled front matter parsers existed, in `app/main.js`,
 `src/report_store.py` and `app/obsidian-sync.js`. Each mangled a different real
 value: a colon inside a title, a list item that read as a key. All three now
 use a real loader (js-yaml / PyYAML), and the save paths no longer drop keys
 they do not own.
+
+`dcc99a3` followed on 2026-10-09. js-yaml throws on a duplicated key, where
+PyYAML and every line-based parser keep the last value, and both js-yaml
+readers caught the throw and carried on with no front matter: one repeated key
+cost a note its title, folders and `is_diarised` on the detail page. Upstream's
+own T2 test (`meeting-detail-flags`, "keeps a manually redacted diarised
+summary transcript authoritative") seeds such a note and failed from `6f0d77b`
+on. No real note had a repeated key. Fold it into `6f0d77b` and `c7fa0be` when
+composing the submission; `frontmatter-duplicate-key.t2` checks list against
+detail.
+
+There was a fourth parser, and it is still line-based:
+`simple_recorder._parse_meeting_markdown`, the list parser. It, not
+`report_store`, is the Python mirror of `parseMeetingMarkdown` that upstream's
+parity tests compare against. So list and detail parse front matter
+differently: front matter that YAML rejects is empty on the detail page and
+read in full in the list. Every note Steno writes is valid YAML (all 151 on
+this machine, 2026-10-09), so only a hand-edited note can show it. A
+submission should convert the list parser too, or say why not.
 
 These are pure bug fixes with no dependency on the rest of the branch, which is
 why they should go upstream first — every commit accepted upstream is one fewer
