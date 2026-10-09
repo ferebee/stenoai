@@ -79,6 +79,10 @@ These are pure bug fixes with no dependency on the rest of the branch, which is
 why they should go upstream first — every commit accepted upstream is one fewer
 to carry through every future rebase.
 
+Checked after a rebase: every `yaml.load` in `app/` passes `{ json: true }`
+(`grep -n 'yaml.load(' app/*.js`). `frontmatter-duplicate-key.t2` covers the
+two readers, not a new call site.
+
 ### 3. Obsidian export of the active report — UPSTREAM CANDIDATE
 
     3baea6e  export the active template report, not just the Standard note
@@ -118,6 +122,10 @@ Not submittable as it stands: `npm run lint:i18n` fails on it, because
 gate allows zero hardcoded strings in `markdown.tsx`. Route them through
 `t()` before cutting a submission branch. (The fork has failed this gate since
 the commit landed; the rebase did not cause it.)
+
+When the gate reports an improvement in another file, lower that file's entry
+in `renderer/i18n-lint-baseline.json` by hand: `npm run lint:i18n:update`
+would also write these two strings into the baseline and hide them.
 
 ### 6. Declared fields — THE FEATURE, discuss before building a PR
 
@@ -164,6 +172,16 @@ which is now stale) and ported to 0.8.0 on 2026-10-07. Only the test list in
 cleared by the error handler, so the recovered audio and its note still pair
 up. Its three tests pass, and the full unit suite (589 node, 282 vitest) passes
 with it.
+
+---
+
+## The fork's e2e specs
+
+Upstream's CLAUDE.md lists upstream's specs; these are the fork's. They run
+with the rest of T2 (`cd app && npm run test:e2e -- --project=t2`).
+
+- `frontmatter-duplicate-key.t2` (group 2): a repeated front matter key reads
+  the same in the list and on the detail page.
 
 ---
 
