@@ -6764,9 +6764,16 @@ function setupCallerId() {
   if (process.platform !== 'darwin' || callerId) return;
   callerId = new CallerId({
     imcp: new ImcpClient({ clientInfo: { name: 'Steno', version: app.getVersion() }, log: sendDebugLog }),
-    applyCallInfo: (stem, calls, { sidecarOnly }) => runPythonScript('simple_recorder.py', [
-      'apply-call-info', stem, '--calls', JSON.stringify(calls), ...(sidecarOnly ? ['--sidecar-only'] : []),
-    ], true),
+    applyCallInfo: async (stem, calls, { sidecarOnly }) => {
+      await runPythonScript('simple_recorder.py', [
+        'apply-call-info', stem, '--calls', JSON.stringify(calls), ...(sidecarOnly ? ['--sidecar-only'] : []),
+      ], true);
+      // A caller added to a finished note fires no processing-complete, so
+      // mirror it to the vault here, as update-meeting does for an edit.
+      if (!sidecarOnly) {
+        try { obsidianSync.syncNoteBySummaryPath(path.join(getOutputDir(), `${stem}_summary.md`)); } catch (_) {}
+      }
+    },
     isProcessing: (stem) => [currentProcessingJob, ...processingQueue]
       .some((job) => processingJobStems(job).includes(stem)),
     log: sendDebugLog,
