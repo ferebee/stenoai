@@ -187,6 +187,14 @@ class FrontmatterParsingTests(unittest.TestCase):
         fm, _ = S._split_frontmatter('---\ndetected_language:\n---\n\nbody\n')
         self.assertIsNone(fm["detected_language"])
 
+    def test_duplicated_key_takes_the_last_value(self):
+        # The JavaScript readers load with js-yaml's `json: true` to match this.
+        text = ('---\ntitle: "Erika Mustermann: Drucker"\n'
+                'is_diarised: false\nis_diarised: true\n---\n\nbody\n')
+        fm, _ = S._split_frontmatter(text)
+        self.assertEqual(fm["title"], "Erika Mustermann: Drucker")
+        self.assertIs(fm["is_diarised"], True)
+
     def test_malformed_yaml_yields_empty_frontmatter_not_an_error(self):
         fm, body = S._split_frontmatter('---\na: [unclosed\n---\n\nbody\n')
         self.assertEqual(fm, {})

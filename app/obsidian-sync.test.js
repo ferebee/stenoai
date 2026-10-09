@@ -78,6 +78,24 @@ test('parseFrontmatter handles a report\'s real YAML: lists and colons in values
   assert.ok(body.startsWith('## Zusammenfassung'));
 });
 
+test('parseFrontmatter lets a duplicated key take its last value and keeps the rest', () => {
+  // js-yaml throws on a duplicated key by default, which dropped every key of
+  // the note. PyYAML (report_store._split_frontmatter) and the line-based
+  // parser this replaced both keep the last value.
+  const note = [
+    '---',
+    'title: "Erika Mustermann: Drucker"',
+    'is_diarised: false',
+    'is_diarised: true',
+    '---',
+    '',
+    '## Summary',
+  ].join('\n');
+  const { fm } = parseFrontmatter(note);
+  assert.equal(fm.title, 'Erika Mustermann: Drucker');
+  assert.equal(fm.is_diarised, true);
+});
+
 test('transformNote strips transcript, lifts participants, adds Obsidian props', () => {
   const { vaultBody, title, dateStr, folderName } = transformNote(NOTE, {
     stem: '20260715-1400_acme',

@@ -2776,9 +2776,12 @@ function normalizeMarkdownForParsing(mdText) {
 function parseMeetingMarkdown(content, mdPath) {
   // Split frontmatter. Parsed with a real YAML loader rather than by hand —
   // the writer has always emitted valid YAML, so every existing note reads
-  // unchanged, and the Python twin (report_store._split_frontmatter) now uses
-  // the same loader instead of a second hand-rolled parser that disagreed with
-  // this one on escaped quotes and on int/bool/list types.
+  // unchanged, and report_store._split_frontmatter now uses the same loader
+  // instead of a second hand-rolled parser that disagreed with this one on
+  // escaped quotes and on int/bool/list types. Its list twin,
+  // simple_recorder._parse_meeting_markdown, is still line-based.
+  // `json: true` lets a duplicated key take its last value, as both Python
+  // readers do; by default js-yaml throws, which lost the whole front matter.
   const meta = {};
   let body = content;
   if (content.startsWith('---')) {
@@ -2789,7 +2792,7 @@ function parseMeetingMarkdown(content, mdPath) {
       const fmText = parts[1];
       body = parts.slice(2).join('---').trim();
       let loaded = null;
-      try { loaded = yaml.load(fmText); } catch (_) { loaded = null; }
+      try { loaded = yaml.load(fmText, { json: true }); } catch (_) { loaded = null; }
       if (loaded && typeof loaded === 'object' && !Array.isArray(loaded)) {
         for (const [key, raw] of Object.entries(loaded)) {
           // Empty string -> null (#283), and a bare (unquoted) date would load

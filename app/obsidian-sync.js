@@ -86,7 +86,9 @@ function parseFrontmatter(raw) {
   const block = rest.slice(0, end);
   const body = rest.slice(end + 4).replace(/^(?:\r?\n)+/, '');
   let loaded = null;
-  try { loaded = yaml.load(block); } catch (_) { loaded = null; }
+  // json: a duplicated key takes its last value, as PyYAML does, instead of
+  // throwing and losing every key.
+  try { loaded = yaml.load(block, { json: true }); } catch (_) { loaded = null; }
   const fm = {};
   if (loaded && typeof loaded === 'object' && !Array.isArray(loaded)) {
     for (const [k, v] of Object.entries(loaded)) {
