@@ -23,10 +23,25 @@ auto-record, and the bug fixes found along the way.
 
 ---
 
-## The seven groups
+## Decided, not yet built
+
+Every change against upstream will need its case made, so each is recorded
+here before it is built: the problem, the evidence, what else was considered,
+and who decided when. Once built, the record moves into its group below, with
+the commits. The measurements are in `../Callwatch-Claude/CHANGES.md`; nothing
+here is taken from real calls beyond counts.
+
+Nothing is pending. The six changes decided on 2026-10-10 were built the same
+day and are recorded in groups 3, 4, 6 and 11.
+
+---
+
+## The groups
 
 Listed oldest first. The grouping is what matters for upstreaming — the branch
-is linear, but it is not one change.
+is linear, but it is not one change. Groups 8–10 (caller recognition, title
+provenance, the note-header tooltips) are on `build/caller-id` only; the
+numbers are the same in both branches' FORK.md.
 
 ### 1. Auto-record — LOCAL ONLY
 
@@ -86,14 +101,23 @@ two readers, not a new call site.
 ### 3. Obsidian export of the active report — UPSTREAM CANDIDATE
 
     3baea6e  export the active template report, not just the Standard note
+    d97b72c  export a note's participants when a report replaces its body
 
 The sync exported the Standard note even when a template report was the one on
 screen. Independent of everything else here.
 
-### 4. Configurable sampling temperature — UPSTREAM CANDIDATE
+`d97b72c` (decided by Chris, 2026-10-10): the export read Participants from the
+body it exports, which for a note with a template report is the report's, and
+a template report has no Participants section. So no participant reached the
+vault, a phone call's caller included, though Steno adds the caller to the
+note's Participants (group 8, on `build/caller-id`). Seen on a note of
+2026-10-10. Participants is the note's, so it is read from the note.
+
+### 4. Configurable sampling temperature and per-request settings — UPSTREAM CANDIDATE
 
     476ba11  allow a configured sampling temperature
     9729711  give the data pass its own temperature setting
+    837d7c9  per-request settings for cloud calls, by kind
 
 Steno omitted the parameter entirely, taking each server's default — typically
 around 0.7, which is high for a task that is mostly extraction. Now
@@ -103,7 +127,40 @@ The setting works by adding `**self._cloud_kwargs()` to each OpenAI-compatible
 call, so a call site upstream adds later silently lacks it. That happened in
 0.8.0: query streaming moved into a new `stream_chat_prompt`, and the rebase
 had to carry the kwargs there by hand. After any rebase, check every
-`cloud_client.chat.completions.create` in `src/summarizer.py`.
+`cloud_client.chat.completions.create` in `src/summarizer.py`, and that the
+four call sites pass their kind: `summary` and `report` in
+`summarize_transcript_streaming`, `title` in `generate_title`, `data` in
+`complete_json`.
+
+**Per-request settings** (`837d7c9`, decided by Chris, 2026-10-10).
+`cloud_requests` in config.json gives the Standard summary, the title, a
+template's prose pass and its data pass (`summary`, `title`, `report`,
+`data`) each a `timeout`, `retries` and `extra_body`, the last passed to the
+server unchanged. A kind left out sends exactly what it always did; chat and
+transcript queries take none.
+
+- *Problem:* behind an OpenAI-compatible server, a reasoning model thinks
+  before every answer, and Steno could change neither that nor the title's
+  hard-coded 30 s timeout. With Qwen 3.6 35B on Osaurus the title failed on 6
+  of 8 calls measured. Each failure was 3 Steno attempts × 3 SDK attempts,
+  nearly five minutes, and Osaurus keeps working on abandoned requests, so the
+  template report then queued behind them.
+- *Evidence:* `../Callwatch-Claude/CHANGES.md`, "Thinking, and what times out"
+  (3 invented and 5 real calls, three thinking setups). Without thinking the
+  title took 1–2 s, 8 of 8. Thinking helped the data pass (34 against 29 of 34
+  fields on the invented calls, fewer done-or-discussed errors on real ones)
+  and the prose pass, so it stays on there.
+- *Considered:* turning thinking off for the title in code (the switch is
+  spelled differently per server: Osaurus honours `enable_thinking: false` and
+  `reasoning_effort: "none"` and ignored four other spellings); a yes/no
+  `thinking` setting (it would do nothing, silently, on another server); only
+  raising the timeout (keeps about 30 s of thinking per title, for a title the
+  template replaces anyway).
+- *Retries:* configuring them also turns off the SDK's own two, so the count
+  is the whole count. A timed-out request is not cancelled on Osaurus, and
+  each silent SDK retry queued another generation behind the one abandoned.
+- *Upstream:* candidate together with the temperature commits. The case is any
+  reasoning model behind an OpenAI-compatible endpoint.
 
 ### 5. Report front matter rendering — UPSTREAM CANDIDATE
 
@@ -146,6 +203,9 @@ would also write these two strings into the baseline and hide them.
     2a58b47  split a template report into a data pass and a prose pass
     70d6324  the data pass reads the report as well as the transcript
     e22435a  run the data pass at temperature 0
+    8644b4a  repair a stray quote in the data pass, and make the retry differ
+    210dae5  field descriptions up to 1,200 characters, never cut
+    1a65371  tell both template passes the day of the recording
 
 Large and opinionated. Before investing in a clean PR, open an issue and find
 out whether maintainers want the mechanism at all. A fork carrying this
@@ -154,6 +214,40 @@ indefinitely is a perfectly stable outcome.
 Note for whoever extracts this: `f313839` and `3f351c7` are a feature and its
 revert. That is honest history for us and noise for a reviewer — a submission
 branch should be recomposed, not cherry-picked verbatim.
+
+Added 2026-10-10, each decided by Chris that day:
+
+- **A stray quote is repaired, and the retry differs** (`8644b4a`, with the
+  retry temperature in `837d7c9`). *Problem:* 1 of 24 data passes returned
+  invalid JSON although the request carried JSON mode: a German „ closed with
+  an ASCII `"`, which ended the string early. The retry repeated the request
+  at temperature 0, got the identical reply, and the report lost every field.
+  *Design:* a quote inside a string that is not followed by `,` `:` `}` `]` or
+  the end cannot close it, so it is escaped and the reply parsed again; the
+  retry runs at 0.2, which earlier gave the same fields as 0. *Considered:*
+  constrained decoding through `json_schema` (not probed on Osaurus yet); a
+  JSON-repair dependency (bundle size, for one failure mode); a prompt rule
+  about quotes (unreliable).
+- **Descriptions up to 1,200 characters, never cut** (`210dae5`). *Problem:*
+  every report written with thinking opened with stray `client:`, `title:`
+  and other field lines. The seven field names the template's shared text
+  mentioned are exactly the seven that leaked, and the nine it never mentioned
+  never did (Qwen 3.6, 8 of 8 reports). A field's description is the only
+  template text the data pass sees and the prose pass does not, so the rules
+  moved there, and the client field's became about 1,050 characters, against a
+  cap of 300 that cut without warning. *Design:* an over-long description is
+  reported like any other unusable declaration (`TEMPLATE_FIELDS_INVALID`):
+  the report keeps its prose and gets no fields. Saving a template does not
+  check its fields block, here as before. *Considered:* a separate data-only
+  section in the template (more mechanism for the same effect, and
+  descriptions already sit beside their keys); stripping echoed lines from the
+  report in code (treats the symptom of a template problem).
+- **The day of the recording** (`1a65371`). *Problem:* a date said without a
+  year came back as 2024 in 3 of 3 runs, and a relative one could not be
+  resolved. *Design:* both template passes open with "This recording was made
+  on Monday, 12 October 2026.", from the note's `date`, set by the recording
+  pipeline and generate-report (and, on `build/caller-id`, by the late fields
+  pass). The Standard summary and the title are unchanged.
 
 ### 7. Recording recovery after a write error — UPSTREAM CANDIDATE
 
@@ -172,6 +266,30 @@ which is now stale) and ported to 0.8.0 on 2026-10-07. Only the test list in
 cleared by the error handler, so the recovered audio and its note still pair
 up. Its three tests pass, and the full unit suite (589 node, 282 vitest) passes
 with it.
+
+---
+
+### 11. Where a recording came from — UPSTREAM CANDIDATE
+
+    cab42ca  record which app a recording came from
+
+Decided by Chris, 2026-10-10, as preparation for choosing a template per kind
+of call (a long Google Meet is a board meeting in English, a phone call a
+German support call, Discord a community call).
+
+- *Problem:* the detected meeting app's bundle id was held in memory while
+  recording and then lost. Nothing durable said whether a recording came from
+  Discord, a browser, Zoom or a phone call, so no rule could use it, and no
+  rule could be tested against past recordings.
+- *Design:* a recording started from the "Meeting detected" notification
+  records the detected app's bundle id in its note as `source_app`; any other
+  start records `manual`. Added once and never rewritten, kept by every save
+  path as a key it does not own, exported like any other property, and
+  reserved as a field name so a template cannot declare its own.
+- *Limits:* a Google Meet in a browser records the browser's id; only the Meet
+  app has its own. Telling a board meeting from other browser calls will need
+  more than the app (duration, language, a calendar).
+- *Upstream:* independent of everything else here; small.
 
 ---
 
@@ -210,7 +328,9 @@ transcript may already have been purged.
 a field emitted as a bare `0:03` is invalid JSON, and the whole block failing to
 parse lost every field, not just that one. Now: a data pass asking only for the
 object, sent with `response_format: json_object` where the server supports it,
-and a prose pass asking only for the report.
+and a prose pass asking only for the report. A server can accept JSON mode
+without enforcing it: Osaurus returned one invalid reply in 24 on 2026-10-10,
+which is why the reply is also repaired (group 6, `8644b4a`).
 
 **The data pass reads the prose report as well as the transcript.** The fields
 that came back empty most often are the ones the prose pass has just written out
@@ -243,9 +363,11 @@ hedging in field descriptions ("the cause, *once established*"). Note that
 over-tightening in the other direction collapsed extraction to 0 of 17 fields
 twice, so this needs measurement, not conviction.
 
-**Relative dates cannot be resolved.** A `date` field returns null for "nächste
-Woche Dienstag" because the model is never told today's date. Steno knows the
-recording date; injecting it would fix every date field at once.
+**Relative dates are the template's to resolve.** Until 2026-10-10 the model
+was never told the date, and a date said without a year came back as 2024.
+Both template passes are now told the day of the recording (group 6,
+`1a65371`); whether a template resolves "nächste Woche Dienstag" against it
+is a rule for the template to state.
 
 **The template path does not chunk.** `_needs_chunking` and map-reduce guard the
 Standard summary path only. A long transcript is sent whole to the template
