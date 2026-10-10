@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import { CHART_COPY, parseChatChart } from '@/lib/chatChart';
 import { ChartErrorBoundary } from '@/components/ChartErrorBoundary';
 import yaml from 'js-yaml';
+import { t } from '@/i18n';
 
 const ChatChart = React.lazy(() => import('@/components/ChatChart'));
 const MarkdownSource = React.createContext('');
@@ -155,6 +156,37 @@ export function splitFrontmatter(text: string): { properties: ReportProperty[]; 
   return { properties, body };
 }
 
+// Keys Steno writes for its own bookkeeping, not facts about the call. They
+// stay in the vault's front matter and the PDF; on screen they go under Details.
+const STENO_KEYS = new Set(['template_id', 'inferred', 'title_source', 'client_source', 'source_app']);
+
+/**
+ * Split a report's properties into what the call established and the rest.
+ *
+ * Details gets Steno's bookkeeping, the title (the note's heading already shows
+ * it) and every field the template marks `(inferred)`: the model's judgement
+ * rather than something said on the call. The split follows that mark rather
+ * than a list of field names, so a template author decides it. Both halves
+ * keep the front matter's order.
+ */
+export function groupReportProperties(properties: ReportProperty[]): {
+  main: ReportProperty[];
+  details: ReportProperty[];
+} {
+  const inferredValue = properties.find(([k]) => k === 'inferred')?.[1];
+  const inferred = new Set(
+    Array.isArray(inferredValue) ? inferredValue.map(String)
+      : typeof inferredValue === 'string' ? [inferredValue] : [],
+  );
+  const main: ReportProperty[] = [];
+  const details: ReportProperty[] = [];
+  for (const property of properties) {
+    const [key] = property;
+    (STENO_KEYS.has(key) || key === 'title' || inferred.has(key) ? details : main).push(property);
+  }
+  return { main, details };
+}
+
 function PropertyValue({ value }: { value: unknown }): React.ReactElement {
   if (Array.isArray(value)) {
     return (
@@ -165,22 +197,25 @@ function PropertyValue({ value }: { value: unknown }): React.ReactElement {
       </div>
     );
   }
-  if (typeof value === 'boolean') return <span>{value ? 'yes' : 'no'}</span>;
+  if (typeof value === 'boolean') {
+    return <span>{value ? t('report.properties.yes') : t('report.properties.no')}</span>;
+  }
   return <span>{String(value)}</span>;
 }
 
-/** The structured half of a report, as a compact key/value header. */
-export function ReportProperties({ properties }: { properties: ReportProperty[] }): React.ReactElement | null {
-  if (!properties.length) return null;
+/** Key/value rows for a list of properties, without a frame. */
+export function PropertyList({
+  properties,
+  testId,
+}: {
+  properties: ReportProperty[];
+  testId?: string;
+}): React.ReactElement {
   return (
     <dl
-      className="mb-4 grid gap-x-4 gap-y-1 rounded-lg px-3 py-2.5 text-[13px]"
-      style={{
-        gridTemplateColumns: 'minmax(6rem, max-content) 1fr',
-        background: 'var(--surface-raised)',
-        border: '1px solid var(--border-subtle)',
-      }}
-      data-testid="report-properties"
+      className="grid gap-x-4 gap-y-1 text-[13px]"
+      style={{ gridTemplateColumns: 'minmax(6rem, max-content) minmax(0, 1fr)' }}
+      data-testid={testId}
     >
       {properties.map(([key, value]) => (
         <React.Fragment key={key}>
@@ -191,5 +226,34 @@ export function ReportProperties({ properties }: { properties: ReportProperty[] 
         </React.Fragment>
       ))}
     </dl>
+  );
+}
+
+/** The lighter, framed box shared by the PDF's header and the on-screen
+ *  panel. Colours are inline because the PDF's HTML has no stylesheet. */
+export function PropertiesFrame({
+  className,
+  children,
+  ...rest
+}: React.HTMLAttributes<HTMLDivElement>): React.ReactElement {
+  return (
+    <div
+      {...rest}
+      className={`rounded-lg px-3 py-2.5 ${className ?? ''}`}
+      style={{ background: 'var(--surface-raised)', border: '1px solid var(--border-subtle)' }}
+    >
+      {children}
+    </div>
+  );
+}
+
+/** Every property of a report as one compact header: the PDF's version, which
+ *  has no disclosure to open. */
+export function ReportProperties({ properties }: { properties: ReportProperty[] }): React.ReactElement | null {
+  if (!properties.length) return null;
+  return (
+    <PropertiesFrame className="mb-4">
+      <PropertyList properties={properties} testId="report-properties" />
+    </PropertiesFrame>
   );
 }

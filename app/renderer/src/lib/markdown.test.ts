@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { renderMarkdown, splitFrontmatter, stripReasoning } from '@/lib/markdown';
+import { groupReportProperties, renderMarkdown, splitFrontmatter, stripReasoning } from '@/lib/markdown';
 
 /**
  * Unit coverage for stripReasoning — the guard that removes `<think>` /
@@ -155,5 +155,39 @@ describe('splitFrontmatter', () => {
     const { properties, body } = splitFrontmatter(input);
     expect(properties).toEqual([]);
     expect(body).toBe(input);
+  });
+});
+
+/**
+ * groupReportProperties — what the call established is shown when Properties
+ * is opened; the title, inferred fields and Steno's bookkeeping go under Details.
+ */
+describe('groupReportProperties', () => {
+  const { properties } = splitFrontmatter(
+    '---\ntitle: "Erika Mustermann: Blindkopie leer"\nclient: Erika Mustermann\n'
+      + 'issue: Blindkopie leer\nsymptoms:\n  - Feld bleibt leer\nsentiment: neutral\n'
+      + 'inferred:\n  - sentiment\ntemplate_id: support-call-fields\n'
+      + 'source_app: com.apple.FaceTime\n---\n\nprose',
+  );
+
+  test('splits by the inferred mark and Steno\'s own keys, in order', () => {
+    const { main, details } = groupReportProperties(properties);
+    expect(main.map(([k]) => k)).toEqual(['client', 'issue', 'symptoms']);
+    expect(details.map(([k]) => k)).toEqual(
+      ['title', 'sentiment', 'inferred', 'template_id', 'source_app'],
+    );
+  });
+
+  test('a field is under Details only when the report marks it inferred', () => {
+    const { main } = groupReportProperties([['sentiment', 'neutral'], ['issue', 'Etwas']]);
+    expect(main.map(([k]) => k)).toEqual(['sentiment', 'issue']);
+  });
+
+  test('field names from older templates stay in the main list', () => {
+    const { main, details } = groupReportProperties([
+      ['reported_problem', 'Etwas'], ['next_steps', ['Chris prüft']], ['template_id', 'x'],
+    ]);
+    expect(main.map(([k]) => k)).toEqual(['reported_problem', 'next_steps']);
+    expect(details.map(([k]) => k)).toEqual(['template_id']);
   });
 });

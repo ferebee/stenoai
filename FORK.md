@@ -198,21 +198,38 @@ transcript queries take none.
 
 react-markdown has no concept of front matter, so a report opening with `---`
 rendered as a horizontal rule followed by every key collapsed into one run-on
-paragraph. Now split off and drawn as a compact key/value header.
+paragraph. Now split off and drawn as a compact key/value list.
 
 Worth upstreaming on its own merit rather than as part of the feature below: a
 user-written markdown template can ask for YAML front matter in stock Steno
 today, and it renders as garbage.
 
-Not submittable as it stands: `npm run lint:i18n` fails on it, because
-`PropertyValue` renders the literal strings `'yes'` and `'no'`. Upstream's
-gate allows zero hardcoded strings in `markdown.tsx`. Route them through
-`t()` before cutting a submission branch. (The fork has failed this gate since
-the commit landed; the rebase did not cause it.)
+**Folded away by default** (decided by Chris, 2026-10-10). The always-open
+table sat between the switch row and the report, and was the first thing on
+every note from a template with fields. Now:
+
+- "Properties" and a count at the right end of the My notes / template switch
+  row, with a disclosure triangle. Shown only on a report that has front matter.
+- Opened, the panel shows the call's own properties. A second, smaller
+  disclosure, "Details", holds the title (the heading already shows it), every
+  field the template marks `(inferred)`, and Steno's bookkeeping
+  (`template_id`, `inferred`, `title_source`, `client_source`, `source_app`).
+  The split follows the `(inferred)` mark rather than field names, so the
+  template author decides it. The count counts the first group only.
+- Open or closed is remembered app-wide in localStorage, not per note.
+- The PDF keeps every property; Obsidian is unaffected.
+
+`groupReportProperties` in `markdown.tsx`; the controls in
+`components/ReportPropertiesDisclosure.tsx`; T1 spec `report-properties`.
+
+The strings now go through `t()`, which fixes the `npm run lint:i18n` failure
+this group carried since it landed (`'yes'` and `'no'` were hardcoded in
+`markdown.tsx`, where upstream's gate allows none). `docs/i18n/copy-inventory.json`
+is regenerated with it.
 
 When the gate reports an improvement in another file, lower that file's entry
 in `renderer/i18n-lint-baseline.json` by hand: `npm run lint:i18n:update`
-would also write these two strings into the baseline and hide them.
+would also write new hardcoded strings into the baseline and hide them.
 
 ### 6. Declared fields — THE FEATURE, discuss before building a PR
 
@@ -334,10 +351,13 @@ German support call, Discord a community call).
 ## The fork's e2e specs
 
 Upstream's CLAUDE.md lists upstream's specs; these are the fork's. They run
-with the rest of T2 (`cd app && npm run test:e2e -- --project=t2`).
+with the rest of their tier (`cd app && npm run test:e2e -- --project=t1`, or `t2`).
 
 - `frontmatter-duplicate-key.t2` (group 2): a repeated front matter key reads
   the same in the list and on the detail page.
+- `report-properties.t1` (group 5): a report's properties are folded away
+  until asked for, with Details folded inside. Seeded by
+  `STENOAI_E2E_SEED_REPORT=fields` in `app/e2e-mock-ipc.js`.
 
 ---
 

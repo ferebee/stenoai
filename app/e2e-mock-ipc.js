@@ -191,6 +191,23 @@ const SEED_REPORT = {
   created_at: '2026-06-19T13:00:00Z',
 };
 
+// A report from a template that declares fields, attached instead when
+// STENOAI_E2E_SEED_REPORT=fields (report-properties T1): front matter with the
+// call's fields, an inferred one and Steno's bookkeeping, then the prose.
+const SEED_FIELDS_REPORT = {
+  id: 'rep_e2e_fields',
+  template_id: 'tpl_e2e_fields',
+  template_name: 'Support call (fields)',
+  model: 'mock-model',
+  content:
+    '---\ntitle: "Erika Mustermann: Blindkopie leer"\nclient: Erika Mustermann\n'
+    + 'organisation: Musterfirma GmbH\nissue: Blindkopie bleibt leer\n'
+    + 'symptoms:\n  - Feld Blindkopie bleibt leer\nchanges:\n  - Signatur neu angelegt\n'
+    + 'sentiment: neutral\ninferred:\n  - sentiment\ntemplate_id: tpl_e2e_fields\n---\n\n'
+    + '## Zusammenfassung\nDie Blindkopie blieb leer, bis die Signatur neu angelegt war.',
+  created_at: '2026-06-19T13:00:00Z',
+};
+
 // Mutable so the stateful set-active-report mock below persists the pill
 // switch across the invalidate → get-meeting refetch, like the real sidecar.
 let seedActiveReport = null;
@@ -205,6 +222,9 @@ const seededMeeting = () => {
           '[00:00] [You] We should ship Friday.\n[00:02] [You] I will prepare the release.\n[00:06] [Others] Sounds good.',
       }
     : SEED_MEETING;
+  if (process.env.STENOAI_E2E_SEED_REPORT === 'fields') {
+    return { ...meeting, reports: [SEED_FIELDS_REPORT], active_report: seedActiveReport };
+  }
   return process.env.STENOAI_E2E_SEED_REPORT === '1'
     ? { ...meeting, reports: [SEED_REPORT], active_report: seedActiveReport }
     : meeting;

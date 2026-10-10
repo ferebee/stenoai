@@ -87,7 +87,14 @@ import { buildNotesHtml, hasNotesContent } from '@/lib/notesPdf';
 import { unwrap } from '@/lib/result';
 import { cn } from '@/lib/utils';
 import { navigate } from '@/lib/router';
-import { ReportProperties, splitFrontmatter, stripReasoning } from '@/lib/markdown';
+import { groupReportProperties, ReportProperties, splitFrontmatter, stripReasoning } from '@/lib/markdown';
+import {
+  DETAILS_OPEN_KEY,
+  PROPERTIES_OPEN_KEY,
+  PropertiesPanel,
+  PropertiesToggle,
+  useStoredFlag,
+} from '@/components/ReportPropertiesDisclosure';
 import { pendingTitleRegens, streamCache, type StreamPhase } from '@/lib/meetingDetailState';
 import { useReprocessBridge } from '@/hooks/reprocessBridgeStore';
 import { useRecording } from '@/hooks/useRecording';
@@ -619,6 +626,15 @@ function DetailContent({
     () => splitFrontmatter(activeReport ? stripReasoning(activeReport.content) : ''),
     [activeReport],
   );
+  // On screen the properties fold away behind a disclosure, with the
+  // bookkeeping under a second one (see ReportPropertiesDisclosure). The PDF
+  // keeps all of them.
+  const propertyGroups = React.useMemo(
+    () => groupReportProperties(reportParts.properties),
+    [reportParts.properties],
+  );
+  const [propertiesOpen, toggleProperties] = useStoredFlag(PROPERTIES_OPEN_KEY);
+  const [detailsOpen, toggleDetails] = useStoredFlag(DETAILS_OPEN_KEY);
 
   const canExportNotesPdf = activeReport
     ? Boolean(reportParts.body.trim() || reportParts.properties.length)
@@ -1136,18 +1152,28 @@ function DetailContent({
         )}
       </header>
 
-      <NoteViewToggle
-        tab={tab}
-        onTab={setTab}
-        hasNotes={hasUserNotes}
-        activeReportId={activeReportId}
-        reports={reports}
-        templates={reportTemplates}
-        onSelectReport={onSelectReport}
-        onDeleteReport={onDeleteReport}
-        onGenerate={onGenerateReport}
-        generating={generateReport.isPending}
-      />
+      <div className="flex items-center justify-between gap-3">
+        <NoteViewToggle
+          tab={tab}
+          onTab={setTab}
+          hasNotes={hasUserNotes}
+          activeReportId={activeReportId}
+          reports={reports}
+          templates={reportTemplates}
+          onSelectReport={onSelectReport}
+          onDeleteReport={onDeleteReport}
+          onGenerate={onGenerateReport}
+          generating={generateReport.isPending}
+        />
+        {tab === 'summary' && activeReport && streamPhase === 'idle' &&
+          reportParts.properties.length > 0 && (
+            <PropertiesToggle
+              count={propertyGroups.main.length}
+              open={propertiesOpen}
+              onToggle={toggleProperties}
+            />
+          )}
+      </div>
 
       {tab === 'summary' && (
         <>
@@ -1187,7 +1213,14 @@ function DetailContent({
               data-testid="report-content"
               style={{ color: 'var(--fg-1)', maxWidth: '72ch' }}
             >
-              <ReportProperties properties={reportParts.properties} />
+              {propertiesOpen && reportParts.properties.length > 0 && (
+                <PropertiesPanel
+                  main={propertyGroups.main}
+                  details={propertyGroups.details}
+                  detailsOpen={detailsOpen}
+                  onDetailsToggle={toggleDetails}
+                />
+              )}
               <ReactMarkdown>{reportParts.body}</ReactMarkdown>
             </section>
           ) : (
