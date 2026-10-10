@@ -616,11 +616,10 @@ function DetailContent({
   // built lazily on click in saveNotesPdf, not on every render. An open report
   // counts on its own: a transcript-only note (auto-summarise off) has no
   // structured sections but can still have a generated report on screen.
-  // A template that declares fields produces a report whose content OPENS with
-  // YAML front matter. Markdown has no concept of it: fed to react-markdown the
-  // delimiters become horizontal rules and the keys collapse into one run-on
-  // paragraph. Split once here, and both the view and the PDF render the same
-  // two halves.
+  // A report can OPEN with YAML frontmatter (a template that asks for it).
+  // Markdown has no concept of it, so react-markdown renders the delimiters as
+  // a rule and a heading underline (see splitFrontmatter). Split once here,
+  // and both the view and the PDF render the same two halves.
   const reportParts = React.useMemo(
     () => splitFrontmatter(activeReport ? stripReasoning(activeReport.content) : ''),
     [activeReport],
@@ -780,7 +779,7 @@ function DetailContent({
     meeting.steno_transfer && !summary && hasUserNotes ? 'notes' : 'summary'
   );
 
-  // Only a generated report that opens with front matter has properties.
+  // Only a generated report that opens with frontmatter has properties.
   const showProperties =
     tab === 'summary' &&
     !!activeReport &&

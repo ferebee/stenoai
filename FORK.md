@@ -196,13 +196,24 @@ transcript queries take none.
 
     aa4d652  render a report's front matter as properties, not as prose
 
-react-markdown has no concept of front matter, so a report opening with `---`
-rendered as a horizontal rule followed by every key collapsed into one run-on
-paragraph. Now split off and drawn as a compact key/value list.
+react-markdown has no concept of frontmatter. A report opening with it showed
+the opening `---` as a horizontal rule; the closing `---` either underlined
+every key above it into one large heading or, after a list, became a second
+rule. (Corrected 2026-10-10: this record and the code comments used to say
+both delimiters became rules and the keys one paragraph. Checked by rendering
+both shapes through react-markdown.) Now split off and drawn as a compact
+key/value list.
 
 Worth upstreaming on its own merit rather than as part of the feature below: a
-user-written markdown template can ask for YAML front matter in stock Steno
+user-written markdown template can ask for YAML frontmatter in stock Steno
 today, and it renders as garbage.
+
+**Prepared as an upstream PR** on `feat/report-properties`, one commit on
+upstream's main. The fork's group 5 files are kept identical to it
+(`markdown.tsx`, its test, `ReportPropertiesDisclosure`, the T1 spec and its
+`frontmatter` seed), so once it is merged the fork drops them at the next
+rebase. Upstream spells it "frontmatter" (142 to 2), and its localStorage
+keys are `steno-…`, hence `steno-report-properties-open`.
 
 **Folded away by default** (decided by Chris, 2026-10-10). The always-open
 table sat between the switch row and the report, and was the first thing on
@@ -357,7 +368,8 @@ with the rest of their tier (`cd app && npm run test:e2e -- --project=t1`, or `t
   the same in the list and on the detail page.
 - `report-properties.t1` (group 5): a report's properties are folded away
   until asked for, then shown in full. Seeded by
-  `STENOAI_E2E_SEED_REPORT=fields` in `app/e2e-mock-ipc.js`.
+  `STENOAI_E2E_SEED_REPORT=frontmatter` in `app/e2e-mock-ipc.js`. Also in
+  the upstream PR.
 
 ---
 

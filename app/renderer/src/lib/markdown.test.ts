@@ -111,22 +111,23 @@ describe('chat Markdown lists', () => {
 });
 
 /**
- * splitFrontmatter — a template that declares fields produces a report opening
- * with YAML. Fed whole to a markdown renderer, `---` becomes a horizontal rule
- * and the keys collapse into one paragraph, which is what the report view did.
+ * splitFrontmatter — a template can produce a report opening with YAML
+ * frontmatter. Fed whole to react-markdown, the opening `---` becomes a
+ * horizontal rule and the closing one turns the keys into a heading, which is
+ * what the report view showed.
  */
 describe('splitFrontmatter', () => {
-  test('splits front matter from the body', () => {
-    const input = '---\nclient: Erika Mustermann\nissue: Blindkopie leer\n---\n\n## Zusammenfassung\nEs lief gut.';
+  test('splits frontmatter from the body', () => {
+    const input = '---\nclient: Erika Mustermann\nissue: Empty Bcc field\n---\n\n## Summary\nIt went well.';
     const { properties, body } = splitFrontmatter(input);
     expect(properties).toEqual([
       ['client', 'Erika Mustermann'],
-      ['issue', 'Blindkopie leer'],
+      ['issue', 'Empty Bcc field'],
     ]);
-    expect(body).toBe('## Zusammenfassung\nEs lief gut.');
+    expect(body).toBe('## Summary\nIt went well.');
   });
 
-  test('a report without front matter is returned untouched', () => {
+  test('a report without frontmatter is returned untouched', () => {
     const input = '## Summary\nNothing structured here.';
     const { properties, body } = splitFrontmatter(input);
     expect(properties).toEqual([]);
@@ -134,23 +135,23 @@ describe('splitFrontmatter', () => {
   });
 
   test('keeps a colon inside a value, which a hand-rolled parser splits', () => {
-    const { properties } = splitFrontmatter('---\nissue: "Outlook: Zugriff"\n---\n\nprose');
-    expect(properties).toEqual([['issue', 'Outlook: Zugriff']]);
+    const { properties } = splitFrontmatter('---\nissue: "Outlook: access denied"\n---\n\nprose');
+    expect(properties).toEqual([['issue', 'Outlook: access denied']]);
   });
 
   test('lists survive as arrays', () => {
-    const { properties } = splitFrontmatter('---\nsymptoms:\n  - eins\n  - zwei\n---\n\nprose');
-    expect(properties).toEqual([['symptoms', ['eins', 'zwei']]]);
+    const { properties } = splitFrontmatter('---\nsymptoms:\n  - one\n  - two\n---\n\nprose');
+    expect(properties).toEqual([['symptoms', ['one', 'two']]]);
   });
 
   test('drops keys the meeting header already shows, and empty values', () => {
-    const input = '---\ntitle: Etwas kaputt\ndate: 2026-09-06\nduration: "0:10"\nduration_seconds: 587\n'
-      + 'language: de\nclient: null\nsystems: []\nissue: Etwas\n---\n\nprose';
+    const input = '---\ntitle: Something broke\ndate: 2026-09-06\nduration: "0:10"\nduration_seconds: 587\n'
+      + 'language: de\nclient: null\nsystems: []\nissue: Something\n---\n\nprose';
     const { properties } = splitFrontmatter(input);
-    expect(properties).toEqual([['issue', 'Etwas']]);
+    expect(properties).toEqual([['issue', 'Something']]);
   });
 
-  test('unparseable front matter is left in the body rather than lost', () => {
+  test('unparseable frontmatter is left in the body rather than lost', () => {
     const input = '---\nclient: a: b: c\n---\n\nprose';
     const { properties, body } = splitFrontmatter(input);
     expect(properties).toEqual([]);

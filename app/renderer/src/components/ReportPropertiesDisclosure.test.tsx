@@ -11,7 +11,7 @@ import { ReportProperties, type ReportProperty } from '@/lib/markdown';
 
 const properties: ReportProperty[] = [
   ['client', 'Erika Mustermann'],
-  ['issue', 'Blindkopie bleibt leer'],
+  ['issue', 'Empty Bcc field'],
 ];
 
 // The pieces as MeetingDetail puts them together: the toggle in the switch row,

@@ -8,7 +8,7 @@ import { t } from '@/i18n';
 // app-wide rather than per note, so someone who wants them sees them on every
 // note until they close them again.
 
-export const PROPERTIES_OPEN_KEY = 'steno.reportProperties.open';
+export const PROPERTIES_OPEN_KEY = 'steno-report-properties-open';
 
 /** A remembered on/off view choice. Storage can be missing or throw (private
  *  mode, cleared site data); the choice then lasts for the session only. */

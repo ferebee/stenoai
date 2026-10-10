@@ -106,32 +106,30 @@ export function renderMarkdown(text: string): React.ReactNode {
   );
 }
 
-
 // ---------------------------------------------------------------------------
-// Report front matter
+// Report frontmatter
 // ---------------------------------------------------------------------------
 
-// A template that declares fields produces a report whose content OPENS with
-// YAML front matter. Markdown has no concept of it, so a renderer handed the
-// whole document turns `---` into a horizontal rule and collapses the keys into
-// one run-on paragraph — which is what the report view did.
+// A report template can ask for output that OPENS with YAML frontmatter.
+// Markdown has no concept of it. Handed the whole document, react-markdown
+// turns the opening `---` into a horizontal rule, and the closing one either
+// underlines every key above it into a single heading or, after a list,
+// becomes a second rule — which is what the report view showed.
 //
-// Keys Steno already shows in its own header are dropped here rather than
-// repeated: the title, date and duration sit in the meeting chrome a few
-// pixels above.
+// The keys every note already carries in its own frontmatter are dropped
+// rather than repeated: the header shows the title, date and duration a few
+// pixels above, and the language is the note's, not the report's.
 const HEADER_DUPLICATE_KEYS = new Set(['title', 'date', 'duration_seconds', 'duration', 'language']);
 
 export type ReportProperty = [string, unknown];
 
 /**
- * Split leading YAML front matter from a report.
+ * Split leading YAML frontmatter from a report.
  *
- * Parsed with js-yaml rather than by hand. Three hand-rolled front matter
- * parsers in this codebase each mangled a different real value — a colon in a
- * title, a list item that looked like a key — and a real loader has none of
- * those edges.
+ * Parsed with js-yaml rather than by hand: a colon inside a value, quoting
+ * and lists are where hand-rolled frontmatter parsing goes wrong.
  *
- * Returns no properties for ordinary reports, which have no front matter, so
+ * Returns no properties for ordinary reports, which have no frontmatter, so
  * the caller renders exactly what it always did.
  */
 export function splitFrontmatter(text: string): { properties: ReportProperty[]; body: string } {
@@ -145,7 +143,7 @@ export function splitFrontmatter(text: string): { properties: ReportProperty[]; 
   try {
     parsed = yaml.load(raw);
   } catch {
-    // Unparseable front matter is left in the body rather than thrown away:
+    // Unparseable frontmatter is left in the body rather than thrown away:
     // showing it badly beats losing it silently.
     return empty;
   }
