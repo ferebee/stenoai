@@ -426,6 +426,21 @@ class MalformedFieldsBlockTests(unittest.TestCase):
         self.assertIsNone(err)
         self.assertEqual(prose, "Just prose, no declaration.")
 
+    def test_a_long_description_is_kept_whole(self):
+        from src.templates import parse_fields_block
+        rule = "Copy the name character for character, never compose one. " * 15
+        fields, _, err = parse_fields_block(f"P.\n\n```fields\nclient: text — {rule.strip()}\n```\n")
+        self.assertIsNone(err)
+        self.assertEqual(fields[0]["description"], rule.strip())
+
+    def test_an_over_long_description_is_reported_not_cut(self):
+        from src.templates import parse_fields_block, MAX_FIELD_DESC_LEN
+        fields, _, err = parse_fields_block(
+            f"P.\n\n```fields\nclient: text — {'x' * (MAX_FIELD_DESC_LEN + 1)}\n```\n")
+        self.assertEqual(fields, [])
+        self.assertIn("'client'", err)
+        self.assertIn(str(MAX_FIELD_DESC_LEN), err)
+
     def test_declared_fields_for_surfaces_the_error(self):
         fields, _, instruction = simple_recorder.declared_fields_for(
             "Prose.\n\n```fields\nclient: text — a: b\n```\n", "tid")

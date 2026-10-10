@@ -157,7 +157,11 @@ FIELD_TYPES = frozenset({"text", "list", "number", "checkbox", "date", "datetime
 # stable across YAML round-trips.
 FIELD_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 MAX_FIELDS = 30
-MAX_FIELD_DESC_LEN = 300
+# A description carries the field's rules to the data pass, and to the data
+# pass alone: the prose pass never sees the declaration. Rules about what may
+# stand as a client name run to about 1,050 characters in practice, so the cap
+# leaves room for that, and a longer one is an error rather than a silent cut.
+MAX_FIELD_DESC_LEN = 1200
 
 # Front matter keys Steno owns. A template declaring one of these could break
 # the UI (processing) or corrupt provenance (detected_language).
@@ -215,11 +219,17 @@ def parse_fields_block(prompt: str):
         head, _, tail = decl.partition(" ")
         parts = _DESC_SPLIT_RE.split(decl, maxsplit=1)
         description = parts[1].strip() if len(parts) > 1 else ""
+        if len(description) > MAX_FIELD_DESC_LEN:
+            # Cutting it would send the model half a rule, and nothing would
+            # say so: report it, like any other unusable declaration.
+            return [], prose, (
+                f"the description of '{name}' is {len(description)} characters; "
+                f"the limit is {MAX_FIELD_DESC_LEN}")
         fields.append({
             "name": str(name).strip(),
             "type": head.strip().lower(),
             "basis": basis,
-            "description": description[:MAX_FIELD_DESC_LEN],
+            "description": description,
         })
     return fields, prose, None
 
