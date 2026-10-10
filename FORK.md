@@ -272,6 +272,7 @@ with it.
 ### 11. Where a recording came from — UPSTREAM CANDIDATE
 
     cab42ca  record which app a recording came from
+    c04efca  record the meeting app for a recording started by hand too
 
 Decided by Chris, 2026-10-10, as preparation for choosing a template per kind
 of call (a long Google Meet is a board meeting in English, a phone call a
@@ -282,10 +283,17 @@ German support call, Discord a community call).
   Discord, a browser, Zoom or a phone call, so no rule could use it, and no
   rule could be tested against past recordings.
 - *Design:* a recording started from the "Meeting detected" notification
-  records the detected app's bundle id in its note as `source_app`; any other
-  start records `manual`. Added once and never rewritten, kept by every save
-  path as a key it does not own, exported like any other property, and
-  reserved as a field name so a template cannot declare its own.
+  records the detected app's bundle id in its note as `source_app`. Added
+  once and never rewritten, kept by every save path as a key it does not own,
+  exported like any other property, and reserved as a field name so a
+  template cannot declare its own.
+- *Manual starts* (`c04efca`, asked for by Chris the same day: most calls are
+  recorded by hand). mic-monitor reports every app holding the microphone, at
+  launch and on each change, and `app/mic-apps.js` keeps that set. A
+  recording started any other way records the meeting app (the auto-detect
+  allowlist) that most recently took the mic; one started before the call is
+  dialled records the first meeting app to take the mic during it; `manual`
+  means none did — an in-person meeting or a dictation.
 - *Limits:* a Google Meet in a browser records the browser's id; only the Meet
   app has its own. Telling a board meeting from other browser calls will need
   more than the app (duration, language, a calendar).
