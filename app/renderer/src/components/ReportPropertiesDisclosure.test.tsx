@@ -47,6 +47,8 @@ describe('report properties disclosure', () => {
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(toggle.textContent).toBe('Properties2');
     expect(screen.queryByTestId('report-properties')).toBeNull();
+    // Nothing to point at while the table is not in the DOM.
+    expect(toggle.hasAttribute('aria-controls')).toBe(false);
   });
 
   it('opens every property, in order', () => {
@@ -54,6 +56,7 @@ describe('report properties disclosure', () => {
     fireEvent.click(screen.getByTestId('report-properties-toggle'));
     const table = screen.getByTestId('report-properties');
     expect(table.id).toBe(PROPERTIES_PANEL_ID);
+    expect(screen.getByTestId('report-properties-toggle').getAttribute('aria-controls')).toBe(PROPERTIES_PANEL_ID);
     expect([...table.querySelectorAll('dt')].map((dt) => dt.textContent)).toEqual(['client', 'issue']);
   });
 

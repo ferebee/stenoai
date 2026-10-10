@@ -51,7 +51,8 @@ export function PropertiesToggle({
     <button
       type="button"
       aria-expanded={open}
-      aria-controls={PROPERTIES_PANEL_ID}
+      // Only while open: closed, the table is not in the DOM to point at.
+      aria-controls={open ? PROPERTIES_PANEL_ID : undefined}
       data-testid="report-properties-toggle"
       onClick={onToggle}
       className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[13px] font-medium transition-colors hover:bg-[color:var(--surface-hover)] hover:text-[color:var(--fg-1)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
