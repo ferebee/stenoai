@@ -218,7 +218,10 @@ function transformNote(raw, { stem, resolveFolderName, report = null }) {
   }
   const folderName = folderIds.length && typeof resolveFolderName === 'function'
     ? resolveFolderName(folderIds[0]) : null;
-  const participants = sectionText(body, 'Participants')
+  // From the NOTE's body even when a report replaces it: Participants is a
+  // section of Steno's note, where a call's caller is added, and a template
+  // report has none, so reading the exported body dropped every caller.
+  const participants = sectionText(noteBody, 'Participants')
     .split(',').map((p) => p.trim()).filter(Boolean);
 
   // Steno's own keys first, then anything else — the note's remaining keys and

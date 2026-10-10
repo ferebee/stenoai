@@ -323,3 +323,13 @@ test('transformNote uses the active report body and merges its frontmatter', () 
   assert.match(vaultBody, /## Zusammenfassung\nreport body/);
   assert.doesNotMatch(vaultBody, /note body/);            // report replaces it
 });
+
+test('transformNote keeps the note\'s participants when a report replaces the body', () => {
+  // Participants is a section of Steno's note, where a call's caller is added;
+  // a template report has no such section, so the export must read the note.
+  const report = '---\nclient: "Erika Mustermann"\n---\n\n## Zusammenfassung\nreport body\n';
+  const { vaultBody } = transformNote(NOTE,
+    { stem: 'x', resolveFolderName: () => null, report });
+  assert.match(vaultBody, /participants:\n  - "Alice"\n  - "Bob"/);
+  assert.match(vaultBody, /## Zusammenfassung\nreport body/);
+});
