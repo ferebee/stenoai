@@ -159,6 +159,12 @@ transcript queries take none.
 - *Retries:* configuring them also turns off the SDK's own two, so the count
   is the whole count. A timed-out request is not cancelled on Osaurus, and
   each silent SDK retry queued another generation behind the one abandoned.
+- *Output limit:* Steno sends no `max_tokens` on these four calls, so the
+  server's default applies; Osaurus's is 16,384 tokens (measured 2026-10-10).
+  With thinking, a 149-minute call's prose pass spent all of it reasoning once
+  in three runs and returned an empty report. `extra_body` carries a higher
+  limit; Osaurus honours one above its default (16,896 tested to the token)
+  and accepted 65,536, which Chris's config now sets for `report` and `data`.
 - *Upstream:* candidate together with the temperature commits. The case is any
   reasoning model behind an OpenAI-compatible endpoint.
 
