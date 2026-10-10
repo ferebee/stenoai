@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { groupReportProperties, renderMarkdown, splitFrontmatter, stripReasoning } from '@/lib/markdown';
+import { renderMarkdown, splitFrontmatter, stripReasoning } from '@/lib/markdown';
 
 /**
  * Unit coverage for stripReasoning — the guard that removes `<think>` /
@@ -134,8 +134,8 @@ describe('splitFrontmatter', () => {
   });
 
   test('keeps a colon inside a value, which a hand-rolled parser splits', () => {
-    const { properties } = splitFrontmatter('---\ntitle: "Mustermann: Zugriff"\n---\n\nprose');
-    expect(properties).toEqual([['title', 'Mustermann: Zugriff']]);
+    const { properties } = splitFrontmatter('---\nissue: "Outlook: Zugriff"\n---\n\nprose');
+    expect(properties).toEqual([['issue', 'Outlook: Zugriff']]);
   });
 
   test('lists survive as arrays', () => {
@@ -144,7 +144,7 @@ describe('splitFrontmatter', () => {
   });
 
   test('drops keys the meeting header already shows, and empty values', () => {
-    const input = '---\ndate: 2026-09-06\nduration: "0:10"\nduration_seconds: 587\n'
+    const input = '---\ntitle: Etwas kaputt\ndate: 2026-09-06\nduration: "0:10"\nduration_seconds: 587\n'
       + 'language: de\nclient: null\nsystems: []\nissue: Etwas\n---\n\nprose';
     const { properties } = splitFrontmatter(input);
     expect(properties).toEqual([['issue', 'Etwas']]);
@@ -155,39 +155,5 @@ describe('splitFrontmatter', () => {
     const { properties, body } = splitFrontmatter(input);
     expect(properties).toEqual([]);
     expect(body).toBe(input);
-  });
-});
-
-/**
- * groupReportProperties — what the call established is shown when Properties
- * is opened; the title, inferred fields and Steno's bookkeeping go under Details.
- */
-describe('groupReportProperties', () => {
-  const { properties } = splitFrontmatter(
-    '---\ntitle: "Erika Mustermann: Blindkopie leer"\nclient: Erika Mustermann\n'
-      + 'issue: Blindkopie leer\nsymptoms:\n  - Feld bleibt leer\nsentiment: neutral\n'
-      + 'inferred:\n  - sentiment\ntemplate_id: support-call-fields\n'
-      + 'source_app: com.apple.FaceTime\n---\n\nprose',
-  );
-
-  test('splits by the inferred mark and Steno\'s own keys, in order', () => {
-    const { main, details } = groupReportProperties(properties);
-    expect(main.map(([k]) => k)).toEqual(['client', 'issue', 'symptoms']);
-    expect(details.map(([k]) => k)).toEqual(
-      ['title', 'sentiment', 'inferred', 'template_id', 'source_app'],
-    );
-  });
-
-  test('a field is under Details only when the report marks it inferred', () => {
-    const { main } = groupReportProperties([['sentiment', 'neutral'], ['issue', 'Etwas']]);
-    expect(main.map(([k]) => k)).toEqual(['sentiment', 'issue']);
-  });
-
-  test('field names from older templates stay in the main list', () => {
-    const { main, details } = groupReportProperties([
-      ['reported_problem', 'Etwas'], ['next_steps', ['Chris prüft']], ['template_id', 'x'],
-    ]);
-    expect(main.map(([k]) => k)).toEqual(['reported_problem', 'next_steps']);
-    expect(details.map(([k]) => k)).toEqual(['template_id']);
   });
 });

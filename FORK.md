@@ -206,21 +206,21 @@ today, and it renders as garbage.
 
 **Folded away by default** (decided by Chris, 2026-10-10). The always-open
 table sat between the switch row and the report, and was the first thing on
-every note from a template with fields. Now:
+every note from a template with fields. Now "Properties" and a count sit at
+the right end of the My notes / template switch row, with a disclosure
+triangle, shown only on a report that has front matter. Opened, the table
+spans the width of that row and lists every property in the front matter's
+order, except those the note's header already shows: `title`, joining `date`,
+`duration` and `language`. Open or closed is remembered app-wide in
+localStorage, not per note. The PDF shows the same properties; Obsidian is
+unaffected.
 
-- "Properties" and a count at the right end of the My notes / template switch
-  row, with a disclosure triangle. Shown only on a report that has front matter.
-- Opened, the panel shows the call's own properties. A second, smaller
-  disclosure, "Details", holds the title (the heading already shows it), every
-  field the template marks `(inferred)`, and Steno's bookkeeping
-  (`template_id`, `inferred`, `title_source`, `client_source`, `source_app`).
-  The split follows the `(inferred)` mark rather than field names, so the
-  template author decides it. The count counts the first group only.
-- Open or closed is remembered app-wide in localStorage, not per note.
-- The PDF keeps every property; Obsidian is unaffected.
+A second level, "Details", for the title, inferred fields and Steno's own
+keys, was built the same day and dropped: on a long call it saved little
+space and read worse than one list. All or nothing.
 
-`groupReportProperties` in `markdown.tsx`; the controls in
-`components/ReportPropertiesDisclosure.tsx`; T1 spec `report-properties`.
+`components/ReportPropertiesDisclosure.tsx` holds the toggle and the
+remembered flag; T1 spec `report-properties`.
 
 The strings now go through `t()`, which fixes the `npm run lint:i18n` failure
 this group carried since it landed (`'yes'` and `'no'` were hardcoded in
@@ -356,7 +356,7 @@ with the rest of their tier (`cd app && npm run test:e2e -- --project=t1`, or `t
 - `frontmatter-duplicate-key.t2` (group 2): a repeated front matter key reads
   the same in the list and on the detail page.
 - `report-properties.t1` (group 5): a report's properties are folded away
-  until asked for, with Details folded inside. Seeded by
+  until asked for, then shown in full. Seeded by
   `STENOAI_E2E_SEED_REPORT=fields` in `app/e2e-mock-ipc.js`.
 
 ---

@@ -87,11 +87,10 @@ import { buildNotesHtml, hasNotesContent } from '@/lib/notesPdf';
 import { unwrap } from '@/lib/result';
 import { cn } from '@/lib/utils';
 import { navigate } from '@/lib/router';
-import { groupReportProperties, ReportProperties, splitFrontmatter, stripReasoning } from '@/lib/markdown';
+import { ReportProperties, splitFrontmatter, stripReasoning } from '@/lib/markdown';
 import {
-  DETAILS_OPEN_KEY,
   PROPERTIES_OPEN_KEY,
-  PropertiesPanel,
+  PROPERTIES_PANEL_ID,
   PropertiesToggle,
   useStoredFlag,
 } from '@/components/ReportPropertiesDisclosure';
@@ -626,15 +625,9 @@ function DetailContent({
     () => splitFrontmatter(activeReport ? stripReasoning(activeReport.content) : ''),
     [activeReport],
   );
-  // On screen the properties fold away behind a disclosure, with the
-  // bookkeeping under a second one (see ReportPropertiesDisclosure). The PDF
-  // keeps all of them.
-  const propertyGroups = React.useMemo(
-    () => groupReportProperties(reportParts.properties),
-    [reportParts.properties],
-  );
+  // On screen the properties fold away behind a disclosure (see
+  // ReportPropertiesDisclosure); the PDF always has them.
   const [propertiesOpen, toggleProperties] = useStoredFlag(PROPERTIES_OPEN_KEY);
-  const [detailsOpen, toggleDetails] = useStoredFlag(DETAILS_OPEN_KEY);
 
   const canExportNotesPdf = activeReport
     ? Boolean(reportParts.body.trim() || reportParts.properties.length)
@@ -786,6 +779,13 @@ function DetailContent({
   const [tab, setTab] = React.useState<'summary' | 'notes'>(() =>
     meeting.steno_transfer && !summary && hasUserNotes ? 'notes' : 'summary'
   );
+
+  // Only a generated report that opens with front matter has properties.
+  const showProperties =
+    tab === 'summary' &&
+    !!activeReport &&
+    streamPhase === 'idle' &&
+    reportParts.properties.length > 0;
 
   return (
     <article data-testid="meeting-detail" className="space-y-9">
@@ -1152,27 +1152,33 @@ function DetailContent({
         )}
       </header>
 
-      <div className="flex items-center justify-between gap-3">
-        <NoteViewToggle
-          tab={tab}
-          onTab={setTab}
-          hasNotes={hasUserNotes}
-          activeReportId={activeReportId}
-          reports={reports}
-          templates={reportTemplates}
-          onSelectReport={onSelectReport}
-          onDeleteReport={onDeleteReport}
-          onGenerate={onGenerateReport}
-          generating={generateReport.isPending}
-        />
-        {tab === 'summary' && activeReport && streamPhase === 'idle' &&
-          reportParts.properties.length > 0 && (
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center justify-between gap-3">
+          <NoteViewToggle
+            tab={tab}
+            onTab={setTab}
+            hasNotes={hasUserNotes}
+            activeReportId={activeReportId}
+            reports={reports}
+            templates={reportTemplates}
+            onSelectReport={onSelectReport}
+            onDeleteReport={onDeleteReport}
+            onGenerate={onGenerateReport}
+            generating={generateReport.isPending}
+          />
+          {showProperties && (
             <PropertiesToggle
-              count={propertyGroups.main.length}
+              count={reportParts.properties.length}
               open={propertiesOpen}
               onToggle={toggleProperties}
             />
           )}
+        </div>
+        {/* Outside the report's 72ch column, so the box is as wide as the row
+            its toggle sits in. */}
+        {showProperties && propertiesOpen && (
+          <ReportProperties id={PROPERTIES_PANEL_ID} properties={reportParts.properties} />
+        )}
       </div>
 
       {tab === 'summary' && (
@@ -1213,14 +1219,6 @@ function DetailContent({
               data-testid="report-content"
               style={{ color: 'var(--fg-1)', maxWidth: '72ch' }}
             >
-              {propertiesOpen && reportParts.properties.length > 0 && (
-                <PropertiesPanel
-                  main={propertyGroups.main}
-                  details={propertyGroups.details}
-                  detailsOpen={detailsOpen}
-                  onDetailsToggle={toggleDetails}
-                />
-              )}
               <ReactMarkdown>{reportParts.body}</ReactMarkdown>
             </section>
           ) : (

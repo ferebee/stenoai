@@ -117,8 +117,9 @@ export function renderMarkdown(text: string): React.ReactNode {
 // one run-on paragraph — which is what the report view did.
 //
 // Keys Steno already shows in its own header are dropped here rather than
-// repeated: the date and duration sit in the meeting chrome a few pixels above.
-const HEADER_DUPLICATE_KEYS = new Set(['date', 'duration_seconds', 'duration', 'language']);
+// repeated: the title, date and duration sit in the meeting chrome a few
+// pixels above.
+const HEADER_DUPLICATE_KEYS = new Set(['title', 'date', 'duration_seconds', 'duration', 'language']);
 
 export type ReportProperty = [string, unknown];
 
@@ -156,37 +157,6 @@ export function splitFrontmatter(text: string): { properties: ReportProperty[]; 
   return { properties, body };
 }
 
-// Keys Steno writes for its own bookkeeping, not facts about the call. They
-// stay in the vault's front matter and the PDF; on screen they go under Details.
-const STENO_KEYS = new Set(['template_id', 'inferred', 'title_source', 'client_source', 'source_app']);
-
-/**
- * Split a report's properties into what the call established and the rest.
- *
- * Details gets Steno's bookkeeping, the title (the note's heading already shows
- * it) and every field the template marks `(inferred)`: the model's judgement
- * rather than something said on the call. The split follows that mark rather
- * than a list of field names, so a template author decides it. Both halves
- * keep the front matter's order.
- */
-export function groupReportProperties(properties: ReportProperty[]): {
-  main: ReportProperty[];
-  details: ReportProperty[];
-} {
-  const inferredValue = properties.find(([k]) => k === 'inferred')?.[1];
-  const inferred = new Set(
-    Array.isArray(inferredValue) ? inferredValue.map(String)
-      : typeof inferredValue === 'string' ? [inferredValue] : [],
-  );
-  const main: ReportProperty[] = [];
-  const details: ReportProperty[] = [];
-  for (const property of properties) {
-    const [key] = property;
-    (STENO_KEYS.has(key) || key === 'title' || inferred.has(key) ? details : main).push(property);
-  }
-  return { main, details };
-}
-
 function PropertyValue({ value }: { value: unknown }): React.ReactElement {
   if (Array.isArray(value)) {
     return (
@@ -203,19 +173,26 @@ function PropertyValue({ value }: { value: unknown }): React.ReactElement {
   return <span>{String(value)}</span>;
 }
 
-/** Key/value rows for a list of properties, without a frame. */
-export function PropertyList({
+/** The structured half of a report, as a compact key/value header. The `id`
+ *  lets the on-screen disclosure point at it (aria-controls). */
+export function ReportProperties({
   properties,
-  testId,
+  id,
 }: {
   properties: ReportProperty[];
-  testId?: string;
-}): React.ReactElement {
+  id?: string;
+}): React.ReactElement | null {
+  if (!properties.length) return null;
   return (
     <dl
-      className="grid gap-x-4 gap-y-1 text-[13px]"
-      style={{ gridTemplateColumns: 'minmax(6rem, max-content) minmax(0, 1fr)' }}
-      data-testid={testId}
+      id={id}
+      className="grid gap-x-4 gap-y-1 rounded-lg px-3 py-2.5 text-[13px]"
+      style={{
+        gridTemplateColumns: 'minmax(6rem, max-content) 1fr',
+        background: 'var(--surface-raised)',
+        border: '1px solid var(--border-subtle)',
+      }}
+      data-testid="report-properties"
     >
       {properties.map(([key, value]) => (
         <React.Fragment key={key}>
@@ -226,34 +203,5 @@ export function PropertyList({
         </React.Fragment>
       ))}
     </dl>
-  );
-}
-
-/** The lighter, framed box shared by the PDF's header and the on-screen
- *  panel. Colours are inline because the PDF's HTML has no stylesheet. */
-export function PropertiesFrame({
-  className,
-  children,
-  ...rest
-}: React.HTMLAttributes<HTMLDivElement>): React.ReactElement {
-  return (
-    <div
-      {...rest}
-      className={`rounded-lg px-3 py-2.5 ${className ?? ''}`}
-      style={{ background: 'var(--surface-raised)', border: '1px solid var(--border-subtle)' }}
-    >
-      {children}
-    </div>
-  );
-}
-
-/** Every property of a report as one compact header: the PDF's version, which
- *  has no disclosure to open. */
-export function ReportProperties({ properties }: { properties: ReportProperty[] }): React.ReactElement | null {
-  if (!properties.length) return null;
-  return (
-    <PropertiesFrame className="mb-4">
-      <PropertyList properties={properties} testId="report-properties" />
-    </PropertiesFrame>
   );
 }

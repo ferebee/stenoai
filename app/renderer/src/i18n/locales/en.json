@@ -40,7 +40,6 @@
   "settings.ai.speakers.unavailable": "Not available on this Mac.",
   "downloads.ollama.ariaLabel": "Summarization model download progress",
   "report.properties.toggle": "Properties",
-  "report.properties.details": "Details",
   "report.properties.yes": "yes",
   "report.properties.no": "no"
 }

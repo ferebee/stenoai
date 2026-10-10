@@ -2,33 +2,26 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  DETAILS_OPEN_KEY,
   PROPERTIES_OPEN_KEY,
-  PropertiesPanel,
+  PROPERTIES_PANEL_ID,
   PropertiesToggle,
   useStoredFlag,
 } from './ReportPropertiesDisclosure';
-import type { ReportProperty } from '@/lib/markdown';
+import { ReportProperties, type ReportProperty } from '@/lib/markdown';
 
-const main: ReportProperty[] = [['client', 'Erika Mustermann'], ['issue', 'Blindkopie leer']];
-const details: ReportProperty[] = [['title', 'Erika Mustermann: Blindkopie leer'], ['template_id', 'x']];
+const properties: ReportProperty[] = [
+  ['client', 'Erika Mustermann'],
+  ['issue', 'Blindkopie bleibt leer'],
+];
 
 // The pieces as MeetingDetail puts them together: the toggle in the switch row,
-// the panel above the report only while it is open.
+// the table below it only while it is open.
 function Harness() {
   const [open, toggle] = useStoredFlag(PROPERTIES_OPEN_KEY);
-  const [detailsOpen, toggleDetails] = useStoredFlag(DETAILS_OPEN_KEY);
   return (
     <>
-      <PropertiesToggle count={main.length} open={open} onToggle={toggle} />
-      {open && (
-        <PropertiesPanel
-          main={main}
-          details={details}
-          detailsOpen={detailsOpen}
-          onDetailsToggle={toggleDetails}
-        />
-      )}
+      <PropertiesToggle count={properties.length} open={open} onToggle={toggle} />
+      {open && <ReportProperties id={PROPERTIES_PANEL_ID} properties={properties} />}
     </>
   );
 }
@@ -53,16 +46,15 @@ describe('report properties disclosure', () => {
     const toggle = screen.getByTestId('report-properties-toggle');
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(toggle.textContent).toBe('Properties2');
-    expect(screen.queryByTestId('report-properties-panel')).toBeNull();
+    expect(screen.queryByTestId('report-properties')).toBeNull();
   });
 
-  it('opens the call\'s properties, with Details folded until asked for', () => {
+  it('opens every property, in order', () => {
     render(<Harness />);
     fireEvent.click(screen.getByTestId('report-properties-toggle'));
-    expect(screen.getByTestId('report-properties').textContent).toContain('Erika Mustermann');
-    expect(screen.queryByTestId('report-properties-details')).toBeNull();
-    fireEvent.click(screen.getByTestId('report-properties-details-toggle'));
-    expect(screen.getByTestId('report-properties-details').textContent).toContain('template_id');
+    const table = screen.getByTestId('report-properties');
+    expect(table.id).toBe(PROPERTIES_PANEL_ID);
+    expect([...table.querySelectorAll('dt')].map((dt) => dt.textContent)).toEqual(['client', 'issue']);
   });
 
   it('remembers the choice for the next note', () => {
@@ -71,6 +63,6 @@ describe('report properties disclosure', () => {
     first.unmount();
     render(<Harness />);
     expect(screen.getByTestId('report-properties-toggle').getAttribute('aria-expanded')).toBe('true');
-    expect(screen.getByTestId('report-properties-panel')).toBeTruthy();
+    expect(screen.getByTestId('report-properties')).toBeTruthy();
   });
 });
