@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { isLiveRowStatus, liveRowRedundant, shouldShowLiveRow } from './liveMeetingRow';
+import {
+  isLiveRowFile,
+  isLiveRowStatus,
+  liveRowRedundant,
+  LIVE_SUMMARY_PREFIX,
+  shouldShowLiveRow,
+} from './liveMeetingRow';
 
 // Regression guard for the phantom "Recording" row.
 //
@@ -60,5 +66,18 @@ describe('liveRowRedundant', () => {
     const base = [{ session_info: { summary_file: '/out/a_summary.md' } }];
     expect(liveRowRedundant(base, null)).toBe(false);
     expect(liveRowRedundant(base, '/out/b_summary.md')).toBe(false);
+  });
+});
+
+// The Previous Notes list showed "Now" in place of the time for every row
+// flagged is_processing, and useMeetings flags a real note that way while its
+// summary is regenerated: a note from last week read "Now" until it finished.
+describe('isLiveRowFile', () => {
+  it('is true for the synthetic live row', () => {
+    expect(isLiveRowFile(`${LIVE_SUMMARY_PREFIX}Note`)).toBe(true);
+  });
+
+  it('is false for a real note, reprocessed or not', () => {
+    expect(isLiveRowFile('/Users/x/Library/stenoai/output/note_summary.json')).toBe(false);
   });
 });
