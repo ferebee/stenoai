@@ -160,12 +160,15 @@ export function splitFrontmatter(text: string): { properties: ReportProperty[]; 
   return { properties, body };
 }
 
-// One value as text: booleans read yes/no, and a nested map or list keeps its
-// YAML flow form (`{name: A, role: B}`) rather than becoming [object Object].
-function formatPropertyValue(value: unknown): string {
-  if (typeof value === 'boolean') return value ? t('report.properties.yes') : t('report.properties.no');
-  if (value !== null && typeof value === 'object') return yaml.dump(value, { flowLevel: 0 }).trim();
-  return String(value);
+// One value: booleans read yes/no, and a nested map or list keeps its YAML flow
+// form (`{name: A, role: B}`) rather than becoming [object Object]. The lookups
+// stay in JSX, where the i18n copy inventory counts them as rendered copy.
+function PropertyText({ value }: { value: unknown }): React.ReactElement {
+  if (typeof value === 'boolean') {
+    return <>{value ? t('report.properties.yes') : t('report.properties.no')}</>;
+  }
+  if (value !== null && typeof value === 'object') return <>{yaml.dump(value, { flowLevel: 0 }).trim()}</>;
+  return <>{String(value)}</>;
 }
 
 function PropertyValue({ value }: { value: unknown }): React.ReactElement {
@@ -173,12 +176,18 @@ function PropertyValue({ value }: { value: unknown }): React.ReactElement {
     return (
       <div className="flex flex-col gap-0.5">
         {value.map((v, i) => (
-          <div key={i}>{formatPropertyValue(v)}</div>
+          <div key={i}>
+            <PropertyText value={v} />
+          </div>
         ))}
       </div>
     );
   }
-  return <span>{formatPropertyValue(value)}</span>;
+  return (
+    <span>
+      <PropertyText value={value} />
+    </span>
+  );
 }
 
 /** The structured half of a report, as a compact key/value header. The `id`
