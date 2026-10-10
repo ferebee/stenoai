@@ -58,6 +58,30 @@ byte-identical to 0.7.0. The setting is read straight from `config.json`, which
 upstream's config layer loads and saves as a whole dict, so an unknown key
 survives every save.
 
+**That changes with the next rebase.** Upstream
+[#566](https://github.com/stenolabs/stenoai/pull/566) (merged 2026-10-10, after
+0.8.0) puts a guard at the top of `requestAutoRecord`: if a recording is
+already running, it logs, calls `exposeMainWindow()` and returns. The guard is
+aimed at the "Take Notes" tap. Upstream has no unattended auto-record, so its
+"auto-record" means the start that tap triggers. Our signature,
+`requestAutoRecord(appName, evt, calEvent, { focus })`, conflicts with it.
+Resolve it as follows:
+
+- Keep the guard, but call `exposeMainWindow()` only when `focus` is set. An
+  unattended start that is turned away must not bring Steno to the front mid-call.
+- The guard tests `currentRecordingSessionName` as well as
+  `currentRecordingProcess || systemAudioRecordingActive`. That covers a
+  capture flap, when `systemAudioRecordingActive` reads false briefly during a
+  recording. The early "already recording" return in `handleMicEvent`, which
+  both upstream and this fork have, tests only the first two. In a flap, our
+  auto-record therefore goes past that check, and only #566's guard stops it
+  from re-pointing `autoStartedSession` at the other app. Consider adding the
+  session name to the early return too, so a flap never reaches
+  `requestAutoRecord` at all.
+
+#566 also tags "Meeting detected" toasts so that newer ones replace older ones.
+Auto-record shows no toast, so the tags do not affect it.
+
 ### 2. Front matter correctness — UPSTREAM CANDIDATE, send first
 
     6f0d77b  parse with a real YAML loader in both readers
