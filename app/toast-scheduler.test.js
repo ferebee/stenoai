@@ -163,3 +163,21 @@ test('showing the same toast twice is a no-op', () => {
   assert.deepStrictEqual(shown, ['once']);
   assert.deepStrictEqual(scheduler.queued, []);
 });
+
+test('only a persistent toast may cover a fullscreen app (#412)', () => {
+  const { toastLayering } = require('./toast-scheduler');
+  assert.deepStrictEqual(toastLayering({ persistent: true }), {
+    visibleOnFullScreen: true,
+    skipTransformProcessType: false,
+    level: 'screen-saver',
+  });
+  // An ordinary toast must not touch the process type, or it would show a
+  // Dock icon the user chose to hide.
+  assert.deepStrictEqual(toastLayering({ persistent: false }), {
+    visibleOnFullScreen: false,
+    skipTransformProcessType: true,
+    level: 'floating',
+  });
+  // A Notification without the option is not persistent.
+  assert.deepStrictEqual(toastLayering({}), toastLayering({ persistent: false }));
+});
