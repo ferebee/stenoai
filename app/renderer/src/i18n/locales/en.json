@@ -91,5 +91,9 @@
   "noteShare.notesPdf": "Share notes as PDF…",
   "noteShare.notesMarkdown": "Share notes as .md…",
   "noteShare.transcript": "Share transcript…",
-  "noteShare.saveNotesMarkdown": "Save notes as .md…"
+  "noteShare.saveNotesMarkdown": "Save notes as .md…",
+  "settings.general.autoRecord.label": "Auto-record detected meetings",
+  "settings.general.autoRecord.description": "Start recording as soon as a meeting is detected, without asking. A notification says it started and offers Stop, and the recording stops when the call ends.",
+  "settings.general.autoRecord.needsDetection": "Turn on Auto-detected meetings to use this.",
+  "settings.general.autoRecord.search": "Record a detected meeting without asking"
 }

@@ -787,6 +787,7 @@ export type GetAutoDetectMeetingsResponse = Result<{ auto_detect_meetings_enable
 export type GetPremeetingNotificationsResponse = Result<{
   premeeting_notifications_enabled: boolean;
 }>;
+export type GetAutoRecordMeetingsResponse = Result<{ auto_record_meetings_enabled: boolean }>;
 export type GetLaunchOnLoginResponse = Result<{ launch_on_login: boolean }>;
 export type GetWhisperModelResponse = Result<{ whisper_model: string; supported_models: string[] }>;
 export type GetKeepRecordingsResponse = Result<{ keep_recordings: boolean }>;
@@ -1356,6 +1357,8 @@ export interface StenoaiBridge {
     setAutoDetectMeetings: RequestFn<[v: boolean], Result<Record<string, never>>>;
     getPremeetingNotifications: RequestFn<[], GetPremeetingNotificationsResponse>;
     setPremeetingNotifications: RequestFn<[v: boolean], Result<Record<string, never>>>;
+    getAutoRecordMeetings: RequestFn<[], GetAutoRecordMeetingsResponse>;
+    setAutoRecordMeetings: RequestFn<[v: boolean], Result<Record<string, never>>>;
     getLaunchOnLogin: RequestFn<[], GetLaunchOnLoginResponse>;
     setLaunchOnLogin: RequestFn<[v: boolean], Result<Record<string, never>>>;
     getWhisperModel: RequestFn<[], GetWhisperModelResponse>;

@@ -56,6 +56,7 @@ import {
   useOutlookCalendarAuth,
 } from '@/hooks/useCalendarEvents';
 import { COMPACT_BTN, COMPACT_TRIGGER, SectionHeading, SettingRow } from './primitives';
+import { AutoRecordRow } from './AutoRecordRow';
 
 const DEFAULT_MIC_VALUE = 'default';
 
@@ -379,6 +380,8 @@ export function GeneralTab() {
           disabled={autoDetect.data === undefined || !autoDetectSupported}
         />
       </SettingRow>
+
+      <AutoRecordRow detectionOn={autoDetectSupported && autoDetect.data === true} />
 
       <SettingRow
         label="Post meeting notifications"

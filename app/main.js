@@ -80,6 +80,11 @@ const { describeUpdateError, updateErrorPhase, isMissingUpdateFeedError } = requ
 const { isOSUpdateEligible, MIN_MACOS_FOR_AUTOUPDATE } = require('./update-os-gate');
 const processingLog = require('./processing-log');
 const { isMeetingApp, allowsDeviceLevelFallback, isMacos14Plus } = require('./meeting-detect');
+const {
+  loadAutoRecordMeetingsEnabled,
+  buildAutoRecordStartedOptions,
+  createStartAnnouncer,
+} = require('./auto-record');
 const { isLinuxLoopbackSupported, startLoopbackCapture, createFrameAligner, createSerialQueue } = require('./linux-loopback');
 const { sweepOrphanedLiveSnapshots } = require('./live-snapshot-sweep');
 const { shareTempDir, sweepShareTemp, SHARE_TEMP_MAX_AGE_MS } = require('./share-temp');
@@ -7600,6 +7605,9 @@ const lastNotifiedAt = new Map();
 // originating app so we can pair its subsequent mic-stop with the recording and
 // auto-stop when the meeting ends.
 let autoStartedSession = null; // { pid, app_id, appName, paused, pauseTimer, autoStopTimer }
+// An unattended start (auto-record) waiting for capture to confirm it, so the
+// "Recording started" toast only ever follows a recording that started.
+const autoRecordAnnouncer = createStartAnnouncer();
 
 function humanizeAppName(evt) {
   for (const o of APP_NAME_OVERRIDES) {
@@ -7738,6 +7746,16 @@ async function handleMicEvent(line) {
   if (calEvent) {
     sendDebugLog(`[auto-detect] matched a calendar event`);
   }
+  // Auto-record (#463, opt-in): start at once instead of asking. Focus stays
+  // where it is, so an unattended start doesn't pull the user out of the call
+  // they are joining; the toast after capture starts says what happened.
+  if (loadAutoRecordMeetingsEnabled(path.join(getUserDataDir(), 'config.json'))) {
+    sendDebugLog('[auto-detect] auto-record on; starting without asking');
+    if (requestAutoRecord(appName, evt, calEvent, { focus: false })) {
+      autoRecordAnnouncer.expect({ appName, calendarTitle: calEvent?.title });
+    }
+    return;
+  }
   showMeetingDetectedNotification(appName, evt, calEvent);
 }
 
@@ -7803,7 +7821,11 @@ function showMeetingDetectedNotification(appName, originatingEvt, calEvent) {
   notif.show();
 }
 
-function requestAutoRecord(appName, originatingEvt, calEvent) {
+// Starts a recording for a detected meeting and pairs it with the meeting's app
+// for auto-stop. `focus` is false for auto-record's unattended start, which must
+// not bring Steno to the front; a Take Notes tap is an explicit request and
+// does. Returns whether a recording was requested.
+function requestAutoRecord(appName, originatingEvt, calEvent, { focus = true } = {}) {
   // Prefer the calendar event title when we matched one — it's user-authored
   // and recognisable weeks later. Otherwise fall back to the neutral
   // 'Note' placeholder that simple_recorder.py recognises in
@@ -7818,10 +7840,13 @@ function requestAutoRecord(appName, originatingEvt, calEvent) {
   // systemAudioRecordingActive reads false while the recording is still live.
   if (currentRecordingProcess || systemAudioRecordingActive || currentRecordingSessionName) {
     sendDebugLog('[auto-detect] record request ignored: a recording is already running');
-    exposeMainWindow();
-    return;
+    if (focus) exposeMainWindow();
+    return false;
   }
-  sendDebugLog(`[auto-detect] user requested record (calendar-titled: ${calEvent?.title ? 'yes' : 'no'})`);
+  sendDebugLog(
+    `[auto-detect] ${focus ? 'user requested record' : 'auto-record starting'} ` +
+    `(calendar-titled: ${calEvent?.title ? 'yes' : 'no'})`
+  );
 
   // Track the originating app so we can pair its mic-stop with this recording
   // and auto-stop when the meeting ends.
@@ -7840,9 +7865,26 @@ function requestAutoRecord(appName, originatingEvt, calEvent) {
   // explicit tap does.) The renderer's auto-record handler then starts the
   // recording and opens the live-note editor.
   if (mainWindow && !mainWindow.isDestroyed()) {
-    exposeMainWindow();
+    if (focus) exposeMainWindow();
     mainWindow.webContents.send('auto-record-requested', { sessionName, appName });
+    return true;
   }
+  return false;
+}
+
+// Auto-record's toast, once capture has confirmed the unattended start: passive
+// (it never takes focus), the body opens Steno on the live note, Stop ends the
+// recording the same way the tray's Stop Recording does.
+function showAutoRecordStartedNotification(details) {
+  const notif = new Notification(buildAutoRecordStartedOptions(details));
+  notif.on('click', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) exposeMainWindow();
+  });
+  notif.on('action', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('tray-stop-recording');
+  });
+  trackNotificationLifecycle(notif, 'auto_record_started');
+  notif.show();
 }
 
 // Auto-stop an ended auto-detected meeting once the mic has stayed released
@@ -9526,6 +9568,30 @@ ipcMain.handle('set-auto-detect-meetings', async (_event, enabled) => {
   }
 });
 
+// Auto-record (#463). No live state to apply: handleMicEvent reads the setting
+// at each detection, so a change takes effect with the next meeting.
+ipcMain.handle('get-auto-record-meetings', async () => {
+  try {
+    const result = await runPythonScript('simple_recorder.py', ['get-auto-record-meetings'], true);
+    return { success: true, ...JSON.parse(result) };
+  } catch (error) {
+    sendDebugLog(`Error getting auto-record setting: ${error.message}`);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('set-auto-record-meetings', async (_event, enabled) => {
+  try {
+    sendDebugLog(`Setting auto-record to: ${enabled}`);
+    const result = await runPythonScript('simple_recorder.py', ['set-auto-record-meetings', enabled === true ? 'True' : 'False']);
+    const jsonMatch = result.match(/\{.*\}/s);
+    return jsonMatch ? JSON.parse(jsonMatch[0]) : { success: true, auto_record_meetings_enabled: enabled === true };
+  } catch (error) {
+    sendDebugLog(`Error setting auto-record: ${error.message}`);
+    return { success: false, error: error.message };
+  }
+});
+
 ipcMain.handle('get-premeeting-notifications', handleGetPremeetingNotifications);
 
 ipcMain.handle('set-premeeting-notifications', async (_event, enabled) => {
@@ -10641,6 +10707,10 @@ ipcMain.on('system-audio-recording-state', (event, isRecording) => {
   sendDebugLog(`[sysaudio] state -> ${isRecording ? 'true' : 'false'} (was ${systemAudioRecordingActive})`);
   systemAudioRecordingActive = isRecording;
   applyRecordingBackgroundThrottling();
+  if (isRecording) {
+    const autoRecordStart = autoRecordAnnouncer.take();
+    if (autoRecordStart) showAutoRecordStartedNotification(autoRecordStart);
+  }
   if (!isRecording && !currentRecordingProcess) {
     // Reset the elapsed counter (avoids leaking startedAtMs when startCapture
     // fails), but DON'T blank currentRecordingSessionName here: this is a
