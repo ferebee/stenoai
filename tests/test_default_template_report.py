@@ -22,6 +22,7 @@ class _FakeSummarizer:
         self._chunks = chunks
         self._data = data
         self.data_calls = 0
+        self.retries = []
         self.last_template_prompt = ""
         self.last_fields_instruction = ""
         self.last_report = None
@@ -41,8 +42,9 @@ class _FakeSummarizer:
         yield self._split()[1]
 
     def extract_fields_json(self, transcript, template_prompt, fields_instruction,
-                            language="en", notes=None, report=None):
+                            language="en", notes=None, report=None, retry=False):
         self.data_calls += 1
+        self.retries.append(retry)
         self.last_fields_instruction = fields_instruction
         self.last_report = report
         return self._data if self._data is not None else self._split()[0]
@@ -234,6 +236,35 @@ class DeclaredFieldsTests(unittest.TestCase):
             content = sc["reports"][0]["content"]
             self.assertFalse(content.startswith("---"))   # prose only
             self.assertIn("no json here", content)
+            self.assertEqual(fake.retries, [False, True])
+
+    def test_the_retry_differs_from_the_first_attempt(self):
+        """At temperature 0 a repeated request returns the same broken reply,
+        so the retry is marked and the summarizer makes it differ."""
+        with tempfile.TemporaryDirectory() as tmp:
+            c, _ = _cfg_with_fields(tmp)
+            mp = Path(tmp) / "m_summary.md"
+            mp.write_text("---\n---\n\n## Summary\nx\n", encoding="utf-8")
+            fake = _FakeSummarizer(["## Bericht\nText"])
+            replies = iter(["not json", '{"client": "Erika Mustermann"}'])
+            fake.extract_fields_json = lambda *a, retry=False, **k: (
+                fake.retries.append(retry), next(replies))[1]
+            simple_recorder.generate_default_template_report(
+                mp, "T: hi", None, "en", 1, c, fake)
+            self.assertEqual(fake.retries, [False, True])
+            fm, _ = report_store._split_frontmatter(
+                report_store.load_sidecar(mp)["reports"][0]["content"])
+            self.assertEqual(fm["client"], "Erika Mustermann")
+
+    def test_an_extract_without_retry_still_retries(self):
+        calls = []
+        def extract():
+            calls.append(1)
+            return "not json"
+        content, raw = simple_recorder.apply_declared_fields(
+            "prose", [{"name": "client", "type": "text", "basis": "stated",
+                       "description": ""}], "t", extract=extract)
+        self.assertEqual((content, raw, len(calls)), ("prose", None, 2))
 
     def test_the_data_pass_receives_the_prose_report(self):
         """The hybrid: fields are read from the report AND the transcript, so
@@ -346,6 +377,26 @@ class JsonBlockToleranceTests(unittest.TestCase):
             '```fields\nclient: ABC\n```\n\n```json\n{"client": "ABC"}\n```\n\nprose\n')
         self.assertEqual(data, {"client": "ABC"})
         self.assertIn("```fields", prose)   # only the json block is consumed
+
+    def test_a_stray_ascii_quote_inside_a_value_is_repaired(self):
+        """Seen once in 24 data passes despite JSON mode: a German „ closed
+        with a plain ASCII quote, ending the string early."""
+        reply = ('{\n  "symptoms": ["Datei „Angebot 2" fehlt", "Ordner leer"],\n'
+                 '  "client": null\n}')
+        self.assertEqual(simple_recorder._parse_data_reply(reply),
+                         {"symptoms": ['Datei „Angebot 2" fehlt', "Ordner leer"],
+                          "client": None})
+
+    def test_valid_json_is_untouched_by_the_repair(self):
+        reply = '{"title": "Er sagte \\"nein\\"", "list": ["a", "b"]}'
+        self.assertEqual(simple_recorder._escape_inner_quotes(reply), reply)
+        self.assertEqual(simple_recorder._parse_data_reply(reply)["title"],
+                         'Er sagte "nein"')
+
+    def test_an_ambiguous_quote_is_left_to_the_retry(self):
+        """A stray quote followed by a comma could close the string, so it is
+        not guessed at."""
+        self.assertIsNone(simple_recorder._parse_data_reply('{"a": "er sagte "ja", dann"}'))
 
     def test_no_json_anywhere_returns_none_and_keeps_everything(self):
         text = '```fields\nclient: ABC\nsymptoms: null\n```\n\nprose\n'

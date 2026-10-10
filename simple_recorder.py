@@ -1031,34 +1031,84 @@ def _split_json_block(text: str):
     return None, text.strip()
 
 
+def _escape_inner_quotes(text: str) -> str:
+    """`text` with each unescaped double quote inside a JSON string escaped,
+    unless it can close the string: followed, after any whitespace, by `,`,
+    `:`, `}`, `]` or the end.
+
+    The one invalid data-pass reply seen in 24 (2026-10-10, Qwen 3.6 on
+    Osaurus, despite JSON mode) opened a German quotation with „ and closed it
+    with a plain ASCII quote, which ended the string early. A quote followed by
+    a letter cannot end a JSON string, so escaping it is safe; a genuinely
+    ambiguous reply still fails to parse and goes to the retry.
+    """
+    out, in_string, i, n = [], False, 0, len(text)
+    while i < n:
+        c = text[i]
+        if in_string and c == "\\":
+            out.append(text[i:i + 2])
+            i += 2
+            continue
+        if c == '"':
+            if not in_string:
+                in_string = True
+            else:
+                j = i + 1
+                while j < n and text[j] in " \t\r\n":
+                    j += 1
+                if j < n and text[j] not in ",:}]":
+                    out.append('\\"')
+                    i += 1
+                    continue
+                in_string = False
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _loads_dict(text: str):
+    """A dict parsed from `text`, or from a stray-quote repair of it
+    (_escape_inner_quotes), or None."""
+    try:
+        data = json.loads(text)
+        return data if isinstance(data, dict) else None
+    except (ValueError, TypeError):
+        pass
+    repaired = _escape_inner_quotes(text)
+    if repaired == text:
+        return None
+    try:
+        data = json.loads(repaired)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    logger.info("[template-data] repaired a stray quote in the data-pass reply")
+    return data
+
+
 def _parse_data_reply(text):
     """The dict from a data pass, or None.
 
     json mode should make this trivial, but not every provider has one, so it
     still tolerates the two things a model does when told to emit bare JSON and
     not quite believing it: wrapping the object in a fence, or introducing it
-    with a sentence.
+    with a sentence. And json mode is not enforced by every server that
+    accepts it, so a stray ASCII quote inside a value is repaired
+    (_escape_inner_quotes).
     """
     text = (text or "").strip()
     if not text:
         return None
-    try:
-        data = json.loads(text)
-        if isinstance(data, dict):
-            return data
-    except (ValueError, TypeError):
-        pass
+    data = _loads_dict(text)
+    if data is not None:
+        return data
     data, _ = _split_json_block(text)
     if isinstance(data, dict):
         return data
     i, j = text.find("{"), text.rfind("}")
     if 0 <= i < j:
-        try:
-            data = json.loads(text[i:j + 1])
-            if isinstance(data, dict):
-                return data
-        except (ValueError, TypeError):
-            pass
+        return _loads_dict(text[i:j + 1])
     return None
 
 
@@ -1280,8 +1330,10 @@ def apply_declared_fields(prose: str, fields: list, template_id: str,
     cannot be parsed even after a retry, `prose` comes back unchanged and
     `raw_json` is None: a report is never lost to this step.
 
-    `extract` is a zero-arg callable running the data pass and returning the
-    model's raw reply.
+    `extract` is a callable running the data pass and returning the model's
+    raw reply. If it takes a `retry` keyword, the retry passes retry=True, so
+    that the summarizer can make the second attempt differ from the first
+    (OllamaSummarizer._data_pass_kwargs).
     """
     if not fields:
         return prose, None
@@ -1293,7 +1345,9 @@ def apply_declared_fields(prose: str, fields: list, template_id: str,
         logger.warning(f"[template-data] RETRY: unparseable data pass from "
                        f"{template_id} — running it again")
         print(f"TEMPLATE_DATA_RETRY:{template_id}", flush=True)
-        data = _parse_data_reply(extract())
+        import inspect
+        takes_retry = "retry" in inspect.signature(extract).parameters
+        data = _parse_data_reply(extract(retry=True) if takes_retry else extract())
     if data is None:
         logger.warning(f"[template-data] {template_id}: no valid json; keeping prose only")
         print(f"TEMPLATE_DATA_FAILED:{template_id}", flush=True)
@@ -1349,14 +1403,14 @@ def generate_default_template_report(summary_path, transcript, notes, language,
         if not prose_report:
             return None
 
-        def _data():
+        def _data(retry=False):
             heartbeat = _start_summary_heartbeat(label="default-report-data")
             try:
                 # The report goes with the transcript, not instead of it: it is
                 # a shortcut to the answers, not a replacement for the source.
                 return summarizer.extract_fields_json(
                     transcript, prose_prompt, fields_instruction,
-                    report_language, notes, report=prose_report)
+                    report_language, notes, report=prose_report, retry=retry)
             finally:
                 heartbeat.set()
 
@@ -4231,10 +4285,10 @@ def generate_report(summary_file, template_id):
         return recorder.summarizer.summarize_transcript_streaming(
             transcript, duration_minutes, output_language, notes_text, **kwargs)
 
-    def _extract_fields(report=None):
+    def _extract_fields(report=None, retry=False):
         return recorder.summarizer.extract_fields_json(
             transcript, _prose_prompt, _fields_instruction, output_language,
-            notes_text, report=report)
+            notes_text, report=report, retry=retry)
 
     print("Generating report...", flush=True)
     streamed_chunks = []
@@ -4267,7 +4321,7 @@ def generate_report(summary_file, template_id):
 
     streamed_md, raw_json = apply_declared_fields(
         streamed_md, _fields, template_id,
-        extract=(lambda: _extract_fields(streamed_md)) if _fields else None,
+        extract=(lambda retry=False: _extract_fields(streamed_md, retry)) if _fields else None,
         summary_path=summary_path,
     )
 
