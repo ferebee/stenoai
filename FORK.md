@@ -195,6 +195,7 @@ transcript queries take none.
 ### 5. Report front matter rendering — UPSTREAM CANDIDATE
 
     aa4d652  render a report's front matter as properties, not as prose
+    e8bf2c1  readable property values, and the table in the PDF
 
 react-markdown has no concept of frontmatter. A report opening with it showed
 the opening `---` as a horizontal rule; the closing `---` either underlined
@@ -213,7 +214,32 @@ upstream's main. The fork's group 5 files are kept identical to it
 (`markdown.tsx`, its test, `ReportPropertiesDisclosure`, the T1 spec and its
 `frontmatter` seed), so once it is merged the fork drops them at the next
 rebase. Upstream spells it "frontmatter" (142 to 2), and its localStorage
-keys are `steno-…`, hence `steno-report-properties-open`.
+keys are `steno-…`, hence `steno-report-properties-open`. `notesPdf.ts` and
+its test joined that list with `e8bf2c1`.
+
+**Review of #578** (cubic, 2026-10-10; second commit `9383565` on the PR,
+`e8bf2c1` here). Seven comments, five acted on:
+
+- A date in the front matter showed as "Wed Sep 30 2026 02:00:00 GMT+0200 …":
+  js-yaml's default schema makes it a `Date`. Now loaded with `CORE_SCHEMA`,
+  so it stays the text the model wrote; a full timestamp keeps its time,
+  which the suggested `toISOString().slice(0, 10)` would have cut. A nested
+  map showed as `[object Object]`, now YAML flow form; booleans inside a list
+  now read yes/no like a single one.
+- The PDF had no table: it is a standalone document without Tailwind or the
+  app's colour tokens, so keys and values printed on alternate lines,
+  unboxed. The PR text had said it showed "the same table". Checked by
+  printing it; `notesPdf.ts` now styles `.report dl` and maps the four tokens
+  onto its paper palette, and a test checks every token the table uses is
+  defined.
+- CRLF line endings are accepted; `aria-controls` is set only while the
+  table is open.
+- Declined: matching the fixture's report title to the note's. Header keys
+  are dropped by key, whatever their value, and a title that differs is the
+  stronger test; the fixture's comment, which claimed they matched, was the
+  real error. Also declined: moving the `localStorage` write out of the
+  state updater, which is deterministic, so StrictMode's double call is
+  harmless.
 
 **Folded away by default** (decided by Chris, 2026-10-10). The always-open
 table sat between the switch row and the report, and was the first thing on
