@@ -239,6 +239,7 @@ class OllamaSummarizer:
             # had. See Config.get_cloud_temperature.
             self.cloud_temperature = config.get_cloud_temperature()
             self.data_temperature = config.get_data_temperature()
+            self.cloud_requests = config.get_cloud_requests()
 
             if not cloud_api_key:
                 raise ValueError("Cloud API key is not configured. Set it in Settings > AI.")
@@ -334,12 +335,35 @@ class OllamaSummarizer:
         """
         return {"num_ctx": resolve_num_ctx(self.model_name)}
 
-    def _cloud_kwargs(self) -> Dict[str, Any]:
-        """Extra request kwargs for cloud calls. Empty unless a temperature is
-        configured, so an unset config sends exactly what it always did."""
-        if getattr(self, "cloud_temperature", None) is None:
-            return {}
-        return {"temperature": self.cloud_temperature}
+    def _cloud_kwargs(self, kind: Optional[str] = None) -> Dict[str, Any]:
+        """Extra request kwargs for cloud calls. Empty unless a temperature or
+        this kind's cloud_requests are configured, so an unset config sends
+        exactly what it always did. `kind` is one of
+        Config.CLOUD_REQUEST_KINDS; None (chat, queries) takes none of them."""
+        kwargs: Dict[str, Any] = {}
+        if getattr(self, "cloud_temperature", None) is not None:
+            kwargs["temperature"] = self.cloud_temperature
+        settings = self._request_settings(kind)
+        if settings.get("extra_body"):
+            kwargs["extra_body"] = dict(settings["extra_body"])
+        if settings.get("timeout"):
+            kwargs["timeout"] = settings["timeout"]
+        return kwargs
+
+    def _request_settings(self, kind: Optional[str]) -> Dict[str, Any]:
+        """This kind's cloud_requests settings (Config.get_cloud_requests), or
+        an empty dict."""
+        return (getattr(self, "cloud_requests", None) or {}).get(kind) or {}
+
+    def _openai_client_for(self, kind: Optional[str]):
+        """The OpenAI client for a request of this kind. With `retries`
+        configured, the SDK's own retries are off, so that the configured
+        count is the whole count: a timed-out request is not cancelled on a
+        server such as Osaurus, and each silent SDK retry queues another
+        generation behind the one abandoned."""
+        if "retries" in self._request_settings(kind):
+            return self.cloud_client.with_options(max_retries=0)
+        return self.cloud_client
 
     def _chunk_budget_chars(self) -> int:
         """Total chars per chunk: content + overlap prefix, sized for the model."""
@@ -824,13 +848,15 @@ class OllamaSummarizer:
         logger.info(f"Ollama ready with model {self.model_name}")
         return True
         
-    def _cloud_chat(self, prompt: str, timeout_seconds: int = 300) -> str:
+    def _cloud_chat(self, prompt: str, timeout_seconds: int = 300,
+                    kind: Optional[str] = None) -> str:
         """
         Send a chat request via the configured cloud API (OpenAI or Anthropic).
 
         Args:
             prompt: The user prompt to send
             timeout_seconds: Request timeout in seconds
+            kind: the request's kind for cloud_requests (OpenAI-compatible only)
 
         Returns:
             The assistant's response text
@@ -839,22 +865,26 @@ class OllamaSummarizer:
             return self._anthropic_chat(prompt, timeout_seconds)
         if self.cloud_provider == "bedrock":
             return self._bedrock_chat(prompt, timeout_seconds)
-        return self._openai_chat(prompt, timeout_seconds)
+        return self._openai_chat(prompt, timeout_seconds, kind)
 
-    def _openai_chat(self, prompt: str, timeout_seconds: int = 300) -> str:
+    def _openai_chat(self, prompt: str, timeout_seconds: int = 300,
+                     kind: Optional[str] = None) -> str:
         """Send a chat request via the OpenAI-compatible cloud API."""
-        max_retries = 3
+        settings = self._request_settings(kind)
+        max_retries = settings["retries"] + 1 if "retries" in settings else 3
+        kwargs = self._cloud_kwargs(kind)
+        kwargs.setdefault("timeout", timeout_seconds)
+        client = self._openai_client_for(kind)
         for attempt in range(max_retries):
             try:
                 if attempt > 0:
                     logger.info(f"Cloud API retry attempt {attempt + 1}/{max_retries}")
                     time.sleep(5)
 
-                response = self.cloud_client.chat.completions.create(
+                response = client.chat.completions.create(
                     model=self.model_name,
                     messages=[{"role": "user", "content": prompt}],
-                    timeout=timeout_seconds,
-                    **self._cloud_kwargs(),
+                    **kwargs,
                 )
                 return response.choices[0].message.content.strip()
 
@@ -1557,7 +1587,7 @@ TRANSCRIPT:
             f"{language_instruction}\n\n{report_context}TRANSCRIPT:\n{transcript}"
         )
 
-    def _data_pass_kwargs(self) -> Dict[str, Any]:
+    def _data_pass_kwargs(self, retry: bool = False) -> Dict[str, Any]:
         """Request kwargs for the data pass, at its own temperature (default 0).
 
         Extraction is a lookup rather than a composition: the right answer for
@@ -1567,11 +1597,24 @@ TRANSCRIPT:
         which nobody was named. The prose pass keeps its own, higher setting,
         because writing readable German is the half that benefits. Splitting the
         passes is what makes it possible to ask for both.
-        """
-        return {**self._cloud_kwargs(),
-                "temperature": getattr(self, "data_temperature", 0.0)}
 
-    def complete_json(self, prompt: str) -> str:
+        `retry` is a second attempt after an unparseable reply. At temperature 0
+        the same request returns the same reply, so a retry repeating it fails
+        the same way (seen once in 24 data passes); it therefore runs at
+        DATA_RETRY_TEMPERATURE or the configured temperature, whichever is
+        higher. 0.2 returned the same fields as 0 in the measurement above.
+        """
+        return {**self._cloud_kwargs("data"), "temperature": self._data_temperature(retry)}
+
+    def _data_temperature(self, retry: bool = False) -> float:
+        """The data pass's temperature, raised for a retry (_data_pass_kwargs)."""
+        temperature = getattr(self, "data_temperature", 0.0)
+        return max(temperature, self.DATA_RETRY_TEMPERATURE) if retry else temperature
+
+    # The data pass's temperature on its retry; see _data_pass_kwargs.
+    DATA_RETRY_TEMPERATURE = 0.2
+
+    def complete_json(self, prompt: str, retry: bool = False) -> str:
         """One NON-streaming completion, in JSON mode where the provider has one.
 
         Nothing streams because nothing is displayed: the data pass produces a
@@ -1579,11 +1622,11 @@ TRANSCRIPT:
         """
         if self.ai_provider == "cloud" and self.cloud_provider not in ("anthropic", "bedrock"):
             try:
-                response = self.cloud_client.chat.completions.create(
+                response = self._openai_client_for("data").chat.completions.create(
                     model=self.model_name,
                     messages=[{"role": "user", "content": prompt}],
                     response_format={"type": "json_object"},
-                    **self._data_pass_kwargs(),
+                    **self._data_pass_kwargs(retry),
                 )
                 return (response.choices[0].message.content or "").strip()
             except Exception as e:
@@ -1599,23 +1642,26 @@ TRANSCRIPT:
                     model=self.model_name,
                     messages=[{"role": "user", "content": prompt}],
                     options={**(self._ollama_options() or {}),
-                             "temperature": getattr(self, "data_temperature", 0.0)},
+                             "temperature": self._data_temperature(retry)},
                     format="json",
                 )
                 return (response.get("message", {}).get("content", "") or "").strip()
             except Exception as e:
                 logger.warning(f"[template-data] ollama json mode failed ({e}); "
                                f"falling back to a plain completion")
-        return "".join(self._stream_completion(prompt)).strip()
+        return "".join(self._stream_completion(prompt, kind="data")).strip()
 
     def extract_fields_json(self, transcript: str, template_prompt: str,
                             fields_instruction: str, language: str = "en",
-                            notes: str = None, report: str = None) -> str:
-        """The data pass. Returns the model's raw reply; parsing is the caller's."""
+                            notes: str = None, report: str = None,
+                            retry: bool = False) -> str:
+        """The data pass. Returns the model's raw reply; parsing is the caller's.
+        `retry` marks a second attempt after an unparseable reply
+        (_data_pass_kwargs)."""
         transcript = _strip_leading_timestamps(transcript)
         prompt = self._create_fields_prompt(
             transcript, template_prompt, fields_instruction, language, notes, report)
-        return self.complete_json(prompt)
+        return self.complete_json(prompt, retry)
 
     def _stream_direct(self, prompt: str):
         """Stream a single non-chunked completion for ``prompt`` via local/remote
@@ -1645,12 +1691,14 @@ TRANSCRIPT:
             if content:
                 yield content
 
-    def _stream_completion(self, prompt: str):
+    def _stream_completion(self, prompt: str, kind: Optional[str] = None):
         """Stream a single completion for ``prompt`` through whichever provider is
         active: adapter, cloud (anthropic / bedrock / openai-compatible), or local/
         remote Ollama. Shared by the free-form template path and the markdown
         summary path so a provider only has to be wired up in one place. Bedrock has
         no eventstream parser yet, so it yields the whole answer as a single chunk.
+        `kind` selects the request's cloud_requests settings (OpenAI-compatible
+        only).
         """
         logger.info(f"Starting streaming summary with {self.ai_provider} model: {self.model_name}")
 
@@ -1692,11 +1740,11 @@ TRANSCRIPT:
                     raise
             else:
                 try:
-                    response = self.cloud_client.chat.completions.create(
+                    response = self._openai_client_for(kind).chat.completions.create(
                         model=self.model_name,
                         messages=[{"role": "user", "content": prompt}],
                         stream=True,
-                        **self._cloud_kwargs(),
+                        **self._cloud_kwargs(kind),
                     )
                     for chunk in response:
                         if not chunk.choices:
@@ -1741,14 +1789,14 @@ TRANSCRIPT:
             # would crash in cloud/adapter mode.
             prompt = self._create_template_report_prompt(
                 transcript, template_prompt, language, notes)
-            inner = self._stream_completion(prompt)
+            inner = self._stream_completion(prompt, kind="report")
             empty_message = "Model returned an empty report"
         elif self._needs_chunking(transcript, notes):
             inner = self._map_reduce_streaming(transcript, language, notes, progress_callback)
             empty_message = "Model returned an empty summary"
         else:
             prompt = self._create_markdown_prompt(transcript, language, notes)
-            inner = self._stream_completion(prompt)
+            inner = self._stream_completion(prompt, kind="summary")
             empty_message = "Model returned an empty summary"
 
         # Defense in depth mirroring _map_reduce_streaming's empty-reduce guard: a
@@ -1899,7 +1947,7 @@ TITLE:"""
             if self.ai_provider == "adapter":
                 response_text = self._adapter_chat(prompt, 30)
             elif self.ai_provider == "cloud":
-                response_text = self._cloud_chat(prompt, 30)
+                response_text = self._cloud_chat(prompt, 30, kind="title")
             else:
                 # HTTP-level timeout must account for model cold-start (~10s Metal init)
                 title_client = ollama.Client(

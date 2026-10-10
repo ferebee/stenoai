@@ -2670,6 +2670,64 @@ class Config:
                 return False
         return self._save()
 
+    # The model requests a recording makes, by job, for cloud_requests.
+    CLOUD_REQUEST_KINDS = ("summary", "title", "report", "data")
+
+    def get_cloud_requests(self) -> dict:
+        """Per-request settings for OpenAI-compatible cloud calls, by kind.
+
+        ``cloud_requests`` in config.json maps a kind — ``summary`` (the
+        Standard summary), ``title``, ``report`` (a template's prose pass) or
+        ``data`` (its fields pass) — to any of:
+
+          timeout     seconds, replacing the call's own (the title's is 30)
+          retries     further attempts after the first; set, it also turns
+                      off the OpenAI SDK's own retries so the count is exact
+          extra_body  an object merged into the request body as is
+
+        ``extra_body`` is passed through rather than modelled because what it
+        holds is server-specific: a reasoning model's thinking is switched off
+        with ``enable_thinking: false`` on one server, ``reasoning_effort`` or
+        ``chat_template_kwargs`` on others, and a server ignores what it does
+        not know. Measured on Osaurus with Qwen 3.6: a title that thinks took
+        about 27 s against its 30 s timeout and failed on 6 of 8 calls; without
+        thinking it took 1-2 s.
+
+        A kind left out, or a setting that does not validate, behaves exactly
+        as before: nothing is added to the request.
+        """
+        raw = self._config.get("cloud_requests")
+        if not isinstance(raw, dict):
+            return {}
+        out = {}
+        for kind, settings in raw.items():
+            if kind not in self.CLOUD_REQUEST_KINDS or not isinstance(settings, dict):
+                logger.warning(f"cloud_requests: ignoring {kind!r}")
+                continue
+            clean = {}
+            timeout = settings.get("timeout")
+            if timeout is not None:
+                if (isinstance(timeout, (int, float)) and not isinstance(timeout, bool)
+                        and 0 < timeout <= 7200):
+                    clean["timeout"] = float(timeout)
+                else:
+                    logger.warning(f"cloud_requests.{kind}.timeout: ignoring {timeout!r}")
+            retries = settings.get("retries")
+            if retries is not None:
+                if isinstance(retries, int) and not isinstance(retries, bool) and 0 <= retries <= 5:
+                    clean["retries"] = retries
+                else:
+                    logger.warning(f"cloud_requests.{kind}.retries: ignoring {retries!r}")
+            extra_body = settings.get("extra_body")
+            if extra_body is not None:
+                if isinstance(extra_body, dict):
+                    clean["extra_body"] = dict(extra_body)
+                else:
+                    logger.warning(f"cloud_requests.{kind}.extra_body: ignoring a non-object")
+            if clean:
+                out[kind] = clean
+        return out
+
     def get_adapter_url(self) -> str:
         """Get the org adapter base URL (set by Electron when a session is
         active). The summariser uses this when ai_provider == 'adapter' to
