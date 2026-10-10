@@ -81,6 +81,7 @@ const { describeUpdateError, updateErrorPhase, isMissingUpdateFeedError } = requ
 const { isOSUpdateEligible, MIN_MACOS_FOR_AUTOUPDATE } = require('./update-os-gate');
 const processingLog = require('./processing-log');
 const { isMeetingApp, allowsDeviceLevelFallback, isMacos14Plus } = require('./meeting-detect');
+const { createMicApps, sourceAppAtStart } = require('./mic-apps');
 const { isLinuxLoopbackSupported, startLoopbackCapture, createFrameAligner, createSerialQueue } = require('./linux-loopback');
 const { sweepOrphanedLiveSnapshots } = require('./live-snapshot-sweep');
 const { userNotesFilePath } = require('./notes-file');
@@ -6286,11 +6287,14 @@ let currentRecordingAppendTarget = null;
 
 // Which app a recording came from, written to the note as `source_app`: the
 // detected meeting app's bundle id when the recording was started from its
-// "Meeting detected" notification, "manual" for any other start. Kept with
-// the recording so a later rule can choose a template per kind of call, and
-// so such a rule can be tested on past recordings. Set at start-recording-ui,
-// consumed when the finished recording is queued.
+// "Meeting detected" notification; otherwise the meeting app holding the mic
+// at the start, or the first to take it during the recording; "manual" when
+// none did. Kept with the recording so a later rule can choose a template per
+// kind of call, and so such a rule can be tested on past recordings. Set at
+// start-recording-ui, consumed when the finished recording is queued.
 let currentRecordingSourceApp = null;
+// The apps holding the mic, from mic-monitor (app/mic-apps.js).
+const micApps = createMicApps();
 
 // Valid recording_started `trigger` values. Whitelisted so a stale/forged
 // renderer arg can't smuggle an arbitrary string into PostHog.
@@ -6326,8 +6330,8 @@ ipcMain.handle('start-recording-ui', async (_, sessionName, trigger, appendTo) =
     // path starts with 'notification_click' while autoStartedSession holds the
     // detected app.
     currentRecordingSourceApp = currentRecordingAppendTarget ? null
-      : trigger === 'notification_click' ? (autoStartedSession?.app_id || null)
-        : 'manual';
+      : sourceAppAtStart({ trigger, autoAppId: autoStartedSession?.app_id || null,
+        micApps, isMeeting: isMeetingApp });
 
     const actualSessionName = sessionName || 'Note';
     // Clear any stale name-keyed draft notes before this recording starts, so a
@@ -7222,12 +7226,20 @@ async function handleMicEvent(line) {
     return;
   }
   if (evt.app_id === STENO_BUNDLE_ID) return; // never react to our own recording
+  micApps.event(evt);
 
   if (evt.event === 'stop') {
     handleMicStop(evt);
     return;
   }
   if (evt.event !== 'start') return;
+
+  // A recording started with no meeting app on the mic records the first one
+  // to take it while recording: the call was dialled after pressing Record.
+  if (currentRecordingSourceApp === 'manual' && evt.app_id && isMeetingApp(evt)
+      && (currentRecordingProcess || systemAudioRecordingActive)) {
+    currentRecordingSourceApp = evt.app_id;
+  }
 
   // Meeting briefly went silent then came back — same app resuming. Cancel any
   // pending pause AND any pending auto-stop, and auto-resume the recording so
