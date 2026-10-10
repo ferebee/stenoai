@@ -138,11 +138,12 @@ def build_fields_instruction(fields: list) -> str:
     of truth for the prompt, the validation and the inferred list.
 
     This is the DATA pass and asks for nothing but the object, so the request
-    can carry response_format json_object where the server supports it — which
-    makes malformed output structurally impossible rather than something to
-    repair afterwards. It is also why the pass exists: asking one completion to
-    satisfy a JSON schema AND write a report gives the model two jobs, and the
-    failures land on whichever it weighs less.
+    can carry response_format json_object where the server supports it. A
+    server that enforces it makes malformed output impossible; one that only
+    accepts it may not: Osaurus returned one invalid reply in 24 (2026-10-10),
+    which _parse_data_reply now repairs. It is also why the pass exists: asking
+    one completion to satisfy a JSON schema AND write a report gives the model
+    two jobs, and the failures land on whichever it weighs less.
     """
     if not fields:
         return ""
