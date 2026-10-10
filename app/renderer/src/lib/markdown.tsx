@@ -127,21 +127,26 @@ export type ReportProperty = [string, unknown];
  * Split leading YAML frontmatter from a report.
  *
  * Parsed with js-yaml rather than by hand: a colon inside a value, quoting
- * and lists are where hand-rolled frontmatter parsing goes wrong.
+ * and lists are where hand-rolled frontmatter parsing goes wrong. The CORE
+ * schema, not the default one, so a date stays the text the model wrote
+ * (`2026-09-30`) instead of becoming a Date shown in the local time zone.
  *
  * Returns no properties for ordinary reports, which have no frontmatter, so
  * the caller renders exactly what it always did.
  */
 export function splitFrontmatter(text: string): { properties: ReportProperty[]; body: string } {
   const empty = { properties: [] as ReportProperty[], body: text ?? '' };
-  if (!text || !text.startsWith('---\n')) return empty;
-  const end = text.indexOf('\n---', 3);
+  // CRLF line endings, from a report written or synced elsewhere, would hide
+  // both delimiters.
+  const source = text?.replace(/\r\n/g, '\n');
+  if (!source || !source.startsWith('---\n')) return empty;
+  const end = source.indexOf('\n---', 3);
   if (end === -1) return empty;
-  const raw = text.slice(4, end + 1);
-  const body = text.slice(end + 4).replace(/^\n+/, '');
+  const raw = source.slice(4, end + 1);
+  const body = source.slice(end + 4).replace(/^\n+/, '');
   let parsed: unknown;
   try {
-    parsed = yaml.load(raw);
+    parsed = yaml.load(raw, { schema: yaml.CORE_SCHEMA });
   } catch {
     // Unparseable frontmatter is left in the body rather than thrown away:
     // showing it badly beats losing it silently.
@@ -155,24 +160,31 @@ export function splitFrontmatter(text: string): { properties: ReportProperty[]; 
   return { properties, body };
 }
 
+// One value as text: booleans read yes/no, and a nested map or list keeps its
+// YAML flow form (`{name: A, role: B}`) rather than becoming [object Object].
+function formatPropertyValue(value: unknown): string {
+  if (typeof value === 'boolean') return value ? t('report.properties.yes') : t('report.properties.no');
+  if (value !== null && typeof value === 'object') return yaml.dump(value, { flowLevel: 0 }).trim();
+  return String(value);
+}
+
 function PropertyValue({ value }: { value: unknown }): React.ReactElement {
   if (Array.isArray(value)) {
     return (
       <div className="flex flex-col gap-0.5">
         {value.map((v, i) => (
-          <div key={i}>{String(v)}</div>
+          <div key={i}>{formatPropertyValue(v)}</div>
         ))}
       </div>
     );
   }
-  if (typeof value === 'boolean') {
-    return <span>{value ? t('report.properties.yes') : t('report.properties.no')}</span>;
-  }
-  return <span>{String(value)}</span>;
+  return <span>{formatPropertyValue(value)}</span>;
 }
 
 /** The structured half of a report, as a compact key/value header. The `id`
- *  lets the on-screen disclosure point at it (aria-controls). */
+ *  lets the on-screen disclosure point at it (aria-controls). The same markup
+ *  goes into the PDF, which has no Tailwind and maps the colour tokens below
+ *  onto its own palette (see notesPdf.ts, `.report dl`). */
 export function ReportProperties({
   properties,
   id,

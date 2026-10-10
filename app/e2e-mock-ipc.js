@@ -192,8 +192,9 @@ const SEED_REPORT = {
 };
 
 // A report whose template asks for YAML frontmatter, attached instead when
-// STENOAI_E2E_SEED_REPORT=frontmatter (report-properties T1). The title and
-// date repeat the note's own and are left out of the properties.
+// STENOAI_E2E_SEED_REPORT=frontmatter (report-properties T1). The title is
+// not the note's on purpose: title and date are left out of the properties by
+// key, whatever their value.
 const SEED_FRONTMATTER_REPORT = {
   id: 'rep_e2e_frontmatter',
   template_id: 'tpl_e2e_client_call',

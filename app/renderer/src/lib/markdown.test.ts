@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { renderMarkdown, splitFrontmatter, stripReasoning } from '@/lib/markdown';
+import { ReportProperties, renderMarkdown, splitFrontmatter, stripReasoning } from '@/lib/markdown';
 
 /**
  * Unit coverage for stripReasoning — the guard that removes `<think>` /
@@ -156,5 +156,42 @@ describe('splitFrontmatter', () => {
     const { properties, body } = splitFrontmatter(input);
     expect(properties).toEqual([]);
     expect(body).toBe(input);
+  });
+
+  test('dates and timestamps stay the text the model wrote', () => {
+    // The default schema makes both a Date, shown in the local time zone.
+    const { properties } = splitFrontmatter(
+      '---\nfollow_up: 2026-09-30\ncalled_at: 2026-09-30T14:00:00+02:00\nresolved: true\nattempts: 2\n---\n\nprose',
+    );
+    expect(properties).toEqual([
+      ['follow_up', '2026-09-30'],
+      ['called_at', '2026-09-30T14:00:00+02:00'],
+      ['resolved', true],
+      ['attempts', 2],
+    ]);
+  });
+
+  test('reads frontmatter with CRLF line endings', () => {
+    const { properties, body } = splitFrontmatter('---\r\nclient: Erika Mustermann\r\n---\r\n\r\n## Summary\r\nDone.');
+    expect(properties).toEqual([['client', 'Erika Mustermann']]);
+    expect(body).toBe('## Summary\nDone.');
+  });
+});
+
+describe('ReportProperties', () => {
+  const cells = (properties: [string, unknown][]) => {
+    const root = document.createElement('div');
+    root.innerHTML = renderToStaticMarkup(ReportProperties({ properties })!);
+    return [...root.querySelectorAll('dd')].map((dd) => dd.textContent);
+  };
+
+  test('booleans read yes/no, inside a list too', () => {
+    expect(cells([['resolved', true], ['checks', [true, false]]])).toEqual(['yes', 'yesno']);
+  });
+
+  test('a nested map keeps its YAML flow form', () => {
+    expect(cells([['contact', { name: 'Erika Mustermann', role: 'Office manager' }]])).toEqual([
+      '{name: Erika Mustermann, role: Office manager}',
+    ]);
   });
 });
