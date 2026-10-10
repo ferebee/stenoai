@@ -448,6 +448,59 @@ class MalformedFieldsBlockTests(unittest.TestCase):
         self.assertEqual(instruction, "")
 
 
+class RecordingDateTests(unittest.TestCase):
+    """Both template passes are told the day of the recording, read from the
+    note: without it a date said without a year came back as 2024."""
+
+    def _summarizer(self, day):
+        from src.summarizer import OllamaSummarizer
+        s = OllamaSummarizer.__new__(OllamaSummarizer)
+        s.ollama_process = None
+        s.recording_date = day
+        return s
+
+    def test_both_prompts_open_with_the_date(self):
+        import datetime
+        s = self._summarizer(datetime.date(2026, 10, 12))
+        sentence = "This recording was made on Monday, 12 October 2026.\n\n"
+        prose = s._create_template_report_prompt("[You] Hallo", "Bericht", "auto")
+        data = s._create_fields_prompt("[You] Hallo", "Bericht", "\n\nJSON", "auto")
+        self.assertTrue(prose.startswith(sentence))
+        self.assertTrue(data.startswith(sentence))
+
+    def test_no_date_leaves_the_prompts_as_they_were(self):
+        s = self._summarizer(None)
+        self.assertNotIn("This recording was made",
+                         s._create_template_report_prompt("[You] Hallo", "Bericht", "auto"))
+
+    def test_the_date_comes_from_the_note(self):
+        import datetime
+        with tempfile.TemporaryDirectory() as tmp:
+            note = Path(tmp) / "m_summary.md"
+            fake = type("S", (), {"recording_date": datetime.date(2001, 1, 1)})()
+            for front, expected in (
+                    ("date: '2026-10-12T09:30:00.123456'", datetime.date(2026, 10, 12)),
+                    ("date: 2026-10-12T09:30:00", datetime.date(2026, 10, 12)),
+                    ("date: 2026-10-12", datetime.date(2026, 10, 12)),
+                    ("date: soon", None),
+                    ("title: x", None)):
+                note.write_text(f"---\n{front}\n---\n\n## Summary\nx\n", encoding="utf-8")
+                simple_recorder._set_recording_date(fake, note)
+                self.assertEqual(fake.recording_date, expected, front)
+
+    def test_the_recording_pipeline_sets_it(self):
+        import datetime
+        with tempfile.TemporaryDirectory() as tmp:
+            c, _ = _cfg_with_fields(tmp)
+            mp = Path(tmp) / "m_summary.md"
+            mp.write_text("---\ndate: '2026-10-12T09:30:00'\n---\n\n## Summary\nx\n",
+                          encoding="utf-8")
+            fake = _FakeSummarizer(['```json\n{"client": "X"}\n```\n\nprose\n'])
+            simple_recorder.generate_default_template_report(
+                mp, "T: hi", None, "en", 1, c, fake)
+            self.assertEqual(fake.recording_date, datetime.date(2026, 10, 12))
+
+
 class HyphenatedFieldNameTests(unittest.TestCase):
     """Hyphens are valid YAML/JSON keys and valid Obsidian properties, so they
     parse — but a bare `next-steps` in a Dataview or Bases expression reads as

@@ -1362,6 +1362,26 @@ def apply_declared_fields(prose: str, fields: list, template_id: str,
     return _render_report_with_frontmatter(fm, prose), json.dumps(data, ensure_ascii=False)
 
 
+def _set_recording_date(summarizer, summary_path) -> None:
+    """Tell the summarizer the day the recording was made, from the note's
+    `date`, for the template passes (OllamaSummarizer._recording_context).
+    Clears it when the note has none, so a summarizer reused across notes
+    never carries one note's date into another's report."""
+    import datetime as _dt
+    value = _note_meta_for_report(summary_path).get("date") if summary_path else None
+    day = None
+    if isinstance(value, _dt.datetime):
+        day = value.date()
+    elif isinstance(value, _dt.date):
+        day = value
+    elif isinstance(value, str):
+        try:
+            day = _dt.date.fromisoformat(value.strip()[:10])
+        except ValueError:
+            day = None
+    summarizer.recording_date = day
+
+
 def generate_default_template_report(summary_path, transcript, notes, language,
                                      duration_minutes, config, summarizer):
     """Best-effort: if the configured default template is not 'standard', generate
@@ -1385,6 +1405,7 @@ def generate_default_template_report(summary_path, transcript, notes, language,
         # A template may declare structured fields in its prompt; the prose half
         # is what remains once that block is removed.
         fields, prose_prompt, fields_instruction = declared_fields_for(tmpl["prompt"], tid)
+        _set_recording_date(summarizer, summary_path)
 
         def _prose():
             heartbeat = _start_summary_heartbeat(label="default-report")
@@ -4271,6 +4292,7 @@ def generate_report(summary_file, template_id):
     if recorder.summarizer is None:
         from src.summarizer import OllamaSummarizer
         recorder.summarizer = OllamaSummarizer()
+    _set_recording_date(recorder.summarizer, summary_path)
 
     # Declared fields drive a generated json instruction; the prose half of the
     # prompt is what remains once the block is removed. Shared with the

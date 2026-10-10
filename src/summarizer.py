@@ -180,7 +180,18 @@ def build_fields_instruction(fields: list) -> str:
 
 
 
+_WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+             "Saturday", "Sunday")
+_MONTHS = ("January", "February", "March", "April", "May", "June", "July",
+           "August", "September", "October", "November", "December")
+
+
 class OllamaSummarizer:
+    # The day the recording was made, as a datetime.date, set by the caller
+    # before a template report; None leaves the prompts as they always were.
+    # A class default, so an instance made without __init__ has it too.
+    recording_date = None
+
     def __init__(self, model_name: Optional[str] = None, ai_provider: Optional[str] = None, config: Optional['Config'] = None):
         """
         Initialize the summarizer with automatic service management.
@@ -1531,6 +1542,20 @@ TRANSCRIPT:
             diarisation_note = "NOTE: [You] is the recorder, [Others] are remote participants.\n\n"
         return diarisation_note, notes_context, language_instruction
 
+    def _recording_context(self) -> str:
+        """The sentence telling the model when the recording was made, or "".
+
+        Without it the model cannot place a date: one said without a year came
+        back as 2024 in 3 of 3 runs (Qwen 3.6, 2026-10-10), and "next Tuesday"
+        cannot be resolved at all. English, like the rest of the framing; the
+        template's language rules decide the language of the answer.
+        """
+        d = getattr(self, "recording_date", None)
+        if d is None:
+            return ""
+        return (f"This recording was made on {_WEEKDAYS[d.weekday()]}, "
+                f"{d.day} {_MONTHS[d.month - 1]} {d.year}.\n\n")
+
     def _create_template_report_prompt(self, transcript: str, template_prompt: str,
                                        language: str = "en", notes: str = None) -> str:
         """PROSE pass: the user's template instructions over the transcript.
@@ -1544,7 +1569,8 @@ TRANSCRIPT:
         diarisation_note, notes_context, language_instruction = self._prompt_context(
             transcript, language, notes)
         return (
-            f"{diarisation_note}{notes_context}{template_prompt.strip()}\n\n"
+            f"{self._recording_context()}{diarisation_note}{notes_context}"
+            f"{template_prompt.strip()}\n\n"
             "Base the report only on what was explicitly discussed; do not infer. "
             "Output the report as markdown with no preamble."
             f"{language_instruction}\n\nTRANSCRIPT:\n{transcript}"
@@ -1581,8 +1607,8 @@ TRANSCRIPT:
                 f"{report.strip()}\n\n"
             )
         return (
-            f"{diarisation_note}{notes_context}{template_prompt.strip()}"
-            f"{fields_instruction}\n\n"
+            f"{self._recording_context()}{diarisation_note}{notes_context}"
+            f"{template_prompt.strip()}{fields_instruction}\n\n"
             "Base your answer only on what was explicitly discussed."
             f"{language_instruction}\n\n{report_context}TRANSCRIPT:\n{transcript}"
         )
