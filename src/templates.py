@@ -177,6 +177,7 @@ RESERVED_FIELD_NAMES = frozenset({
     "detected_language", "is_diarised", "folders", "transcription_failed",
     "reprocessable", "audio_file", "error", "notes_generated", "notes_stale",
     "is_live_transcript", "processing", "updated_at", "source", "steno_stem",
+    "source_app",
 })
 
 _DESC_SPLIT_RE = re.compile(r"\s+(?:—|--)\s+")

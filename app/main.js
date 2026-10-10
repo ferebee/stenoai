@@ -5746,6 +5746,9 @@ async function processNextInQueue() {
     if (currentProcessingJob.liveTranscriptFile && fs.existsSync(currentProcessingJob.liveTranscriptFile)) {
       processArgs.push('--live-transcript', currentProcessingJob.liveTranscriptFile);
     }
+    if (currentProcessingJob.sourceApp) {
+      processArgs.push('--source-app', currentProcessingJob.sourceApp);
+    }
     // Continue-recording: fold this segment into an existing note instead of
     // creating a new one. The backend appends the transcript, marks the note
     // notes_stale, and emits SAVED:<target> so the completion event points at
@@ -6268,8 +6271,8 @@ function sweepStuckProcessingFlags() {
   }
 }
 
-function addToProcessingQueue(audioFile, sessionName, notesFile, liveTranscriptFile, appendTo, summaryFile) {
-  processingQueue.push({ audioFile, sessionName, notesFile, liveTranscriptFile, appendTo, summaryFile });
+function addToProcessingQueue(audioFile, sessionName, notesFile, liveTranscriptFile, appendTo, summaryFile, sourceApp) {
+  processingQueue.push({ audioFile, sessionName, notesFile, liveTranscriptFile, appendTo, summaryFile, sourceApp });
   console.log(`📋 Added to processing queue: ${sessionName} (Queue size: ${processingQueue.length})`);
   processNextInQueue();
 }
@@ -6280,6 +6283,14 @@ function addToProcessingQueue(audioFile, sessionName, notesFile, liveTranscriptF
 // the segment's transcript is folded into that note instead of creating a
 // new one.
 let currentRecordingAppendTarget = null;
+
+// Which app a recording came from, written to the note as `source_app`: the
+// detected meeting app's bundle id when the recording was started from its
+// "Meeting detected" notification, "manual" for any other start. Kept with
+// the recording so a later rule can choose a template per kind of call, and
+// so such a rule can be tested on past recordings. Set at start-recording-ui,
+// consumed when the finished recording is queued.
+let currentRecordingSourceApp = null;
 
 // Valid recording_started `trigger` values. Whitelisted so a stale/forged
 // renderer arg can't smuggle an arbitrary string into PostHog.
@@ -6311,6 +6322,12 @@ ipcMain.handle('start-recording-ui', async (_, sessionName, trigger, appendTo) =
         sendDebugLog('[append] invalid or missing append target; recording as a new note');
       }
     }
+    // A continued recording's note already has its source; the auto-record
+    // path starts with 'notification_click' while autoStartedSession holds the
+    // detected app.
+    currentRecordingSourceApp = currentRecordingAppendTarget ? null
+      : trigger === 'notification_click' ? (autoStartedSession?.app_id || null)
+        : 'manual';
 
     const actualSessionName = sessionName || 'Note';
     // Clear any stale name-keyed draft notes before this recording starts, so a
@@ -10103,6 +10120,8 @@ ipcMain.handle('process-system-audio-recording', async (event, audioFilePath, se
     // starts clean.
     const appendTo = currentRecordingAppendTarget;
     currentRecordingAppendTarget = null;
+    const sourceApp = currentRecordingSourceApp;
+    currentRecordingSourceApp = null;
 
     // Instant stop: the note the pipeline will write to. For an append it's the
     // existing note; for a new Parakeet recording it's the deterministic
@@ -10117,7 +10136,7 @@ ipcMain.handle('process-system-audio-recording', async (event, audioFilePath, se
         : undefined;
 
     // Use the existing processing queue to avoid concurrent Ollama/Whisper runs
-    addToProcessingQueue(audioFilePath, actualSessionName, notesPath, liveTranscriptFile, appendTo, jobSummaryFile);
+    addToProcessingQueue(audioFilePath, actualSessionName, notesPath, liveTranscriptFile, appendTo, jobSummaryFile, sourceApp);
 
     // recording_stopped is NOT tracked here -- stop-recording-ui already
     // fires it (with the real duration_bucket) for every stop. This handler

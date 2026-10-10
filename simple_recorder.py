@@ -367,6 +367,35 @@ def _merge_preserved_frontmatter(summary_path, meta: dict) -> dict:
             merged[k] = v
     return merged
 
+def _stamp_source_app(summary_path, source_app) -> bool:
+    """Record which app a recording came from, as `source_app` in the note's
+    front matter: a bundle id such as com.hnc.Discord or com.apple.avconferenced,
+    or "manual". Added only while absent, so a reprocess or a continued
+    recording never rewrites it. Every save path keeps the front matter keys it
+    does not own (_merge_preserved_frontmatter), so stamping the note once is
+    enough. Returns True when it wrote."""
+    if not source_app or summary_path is None:
+        return False
+    try:
+        path = Path(summary_path)
+        if not path.exists():
+            return False
+        text = path.read_text(encoding='utf-8')
+        from src.report_store import _split_frontmatter
+        existing, _ = _split_frontmatter(text)
+        if existing.get('source_app') or not text.startswith('---\n'):
+            return False
+        end = text.find('\n---', 3)
+        if end == -1:
+            return False
+        escaped = str(source_app).replace('\\', '\\\\').replace('"', '\\"')
+        _atomic_write_text(path, f'{text[:end]}\nsource_app: "{escaped}"{text[end:]}')
+        return True
+    except Exception as e:
+        logger.warning(f"could not record source_app: {e}")
+        return False
+
+
 def _persist_speaker_sidecar(output_dir, meeting_stem: str, transcript_data: dict) -> bool:
     """Write the `{stem}_speakers.json` sidecar from diarization output a
     run has ALREADY computed. Returns True when a sidecar was written.
@@ -1612,13 +1641,18 @@ def _read_existing_user_notes(summary_path: Path):
                    '(continue-recording): the new transcript is appended to the '
                    "note's Transcript section, the note is marked notes_stale, "
                    'and no summary/title generation runs.')
-def process_streaming(audio_file, name, notes, live_transcript, append_to):
+@click.option('--source-app', 'source_app', default=None,
+              help="The app the recording came from, a bundle id or 'manual', "
+                   'recorded in the note as source_app.')
+def process_streaming(audio_file, name, notes, live_transcript, append_to, source_app=None):
     """Process audio with streaming summary output.
 
     Transcribes audio, then streams the summary as CHUNK: prefixed lines
     to stdout for Electron to relay to the renderer in real time.
     """
     import sys
+
+    new_note = {"path": None}
 
     async def run():
         recorder = MeetingPipeline()
@@ -1645,6 +1679,11 @@ def process_streaming(audio_file, name, notes, live_transcript, append_to):
         placeholder_note = None if append_to else (
             recorder.output_dir / f"{Path(audio_file).stem}_summary.md"
         )
+        # The placeholder note usually exists already (written at stop), and
+        # every rewrite below keeps what is stamped on it now; the stamp after
+        # run() covers a note this command creates.
+        new_note["path"] = placeholder_note
+        _stamp_source_app(placeholder_note, source_app)
 
         def _refresh_edited_notes(current):
             if placeholder_note is None:
@@ -2031,7 +2070,10 @@ def process_streaming(audio_file, name, notes, live_transcript, append_to):
             duration_minutes, config, recorder.summarizer,
         )
 
-    asyncio.run(run())
+    try:
+        asyncio.run(run())
+    finally:
+        _stamp_source_app(new_note["path"], source_app)
 
 
 @cli.command(name='get-whisper-model')
