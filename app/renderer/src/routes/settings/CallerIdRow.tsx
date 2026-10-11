@@ -7,6 +7,30 @@ import { COMPACT_BTN, SettingRow } from './primitives';
 
 type CallerIdSettings = Extract<GetCallerIdResponse, { success: true }>;
 
+// iMCP's home page (it forwards to the project on GitHub): what it is and how
+// to install it, before anyone downloads anything.
+const IMCP_URL = 'https://imcp.app';
+
+// The description names iMCP as a link. One sentence with an {{app}} slot,
+// so a translation keeps the link where its grammar needs it.
+function Description() {
+  const [before, after = ''] = t('settings.general.callerId.description').split('{{app}}');
+  return (
+    <>
+      {before}
+      <button
+        type="button"
+        onClick={() => void ipc().shell.openExternal(IMCP_URL)}
+        className="underline underline-offset-2 hover:no-underline"
+        style={{ color: 'var(--fg-1)' }}
+      >
+        {t('settings.general.callerId.imcpLink')}
+      </button>
+      {after}
+    </>
+  );
+}
+
 // What to tell the user, in the order they would fix things. Literal keys, so
 // the copy inventory can read them.
 function statusText(data: CallerIdSettings): string | null {
@@ -52,7 +76,7 @@ export function CallerIdRow() {
       align="start"
       description={
         <>
-          {t('settings.general.callerId.description')}
+          <Description />
           {status && (
             <span className="mt-1 block" data-testid="caller-id-status">
               {status}
