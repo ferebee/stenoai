@@ -93,6 +93,7 @@
   "noteShare.transcript": "Share transcript…",
   "noteShare.saveNotesMarkdown": "Save notes as .md…",
   "report.properties.toggle": "Properties",
+  "report.properties.toggleLabel": "Properties, {{count}}",
   "report.properties.yes": "yes",
   "report.properties.no": "no"
 }

@@ -171,6 +171,41 @@ describe('splitFrontmatter', () => {
     ]);
   });
 
+  test('the closing delimiter is a whole line, not a prefix', () => {
+    for (const input of ['---\nclient: Acme\n---oops\nBody', '---\nclient: Acme\n----\nBody']) {
+      expect(splitFrontmatter(input)).toEqual({ properties: [], body: input });
+    }
+    // Trailing blanks on a delimiter line are still a delimiter.
+    expect(splitFrontmatter('--- \nclient: Acme\n---\t\n\nBody')).toEqual({
+      properties: [['client', 'Acme']],
+      body: 'Body',
+    });
+  });
+
+  test('header keys are dropped whatever their case', () => {
+    const { properties } = splitFrontmatter('---\nTitle: X\nDATE: 2026-01-01\nclient: A\n---\n\nprose');
+    expect(properties).toEqual([['client', 'A']]);
+  });
+
+  test('a nested map or list comes back in YAML flow form', () => {
+    const { properties } = splitFrontmatter(
+      '---\ncontact: {name: Erika Mustermann, role: Office manager}\nsteps:\n  - [restart, retry]\n  - plain\n---\n\nprose',
+    );
+    expect(properties).toEqual([
+      ['contact', '{name: Erika Mustermann, role: Office manager}'],
+      ['steps', ['[restart, retry]', 'plain']],
+    ]);
+  });
+
+  test('a long chain of YAML aliases is left in the body, not formatted', () => {
+    // Each alias nests the previous value: 3000 of them (about 65k characters)
+    // made yaml.dump throw a RangeError while rendering.
+    let chain = 'a0: &a0 x\n';
+    for (let i = 1; i < 3000; i++) chain += `a${i}: &a${i} [*a${i - 1}]\n`;
+    const input = `---\n${chain}---\n\nprose`;
+    expect(splitFrontmatter(input)).toEqual({ properties: [], body: input });
+  });
+
   test('reads frontmatter with CRLF line endings', () => {
     const { properties, body } = splitFrontmatter('---\r\nclient: Erika Mustermann\r\n---\r\n\r\n## Summary\r\nDone.');
     expect(properties).toEqual([['client', 'Erika Mustermann']]);
@@ -189,9 +224,4 @@ describe('ReportProperties', () => {
     expect(cells([['resolved', true], ['checks', [true, false]]])).toEqual(['yes', 'yesno']);
   });
 
-  test('a nested map keeps its YAML flow form', () => {
-    expect(cells([['contact', { name: 'Erika Mustermann', role: 'Office manager' }]])).toEqual([
-      '{name: Erika Mustermann, role: Office manager}',
-    ]);
-  });
 });

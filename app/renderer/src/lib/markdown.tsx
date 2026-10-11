@@ -118,8 +118,14 @@ export function renderMarkdown(text: string): React.ReactNode {
 //
 // The keys every note already carries in its own frontmatter are dropped
 // rather than repeated: the header shows the title, date and duration a few
-// pixels above, and the language is the note's, not the report's.
+// pixels above, and the language is the note's, not the report's. Matched
+// without regard to case, so a model's `Title:` goes too.
 const HEADER_DUPLICATE_KEYS = new Set(['title', 'date', 'duration_seconds', 'duration', 'language']);
+
+// Frontmatter longer than this stays in the body. Real reports' frontmatter
+// runs to about 2 KB; the cap keeps a chain of YAML aliases, each nesting the
+// previous value, far too short to make formatting slow or overflow the stack.
+const MAX_FRONTMATTER_LENGTH = 16_000;
 
 export type ReportProperty = [string, unknown];
 
@@ -131,6 +137,9 @@ export type ReportProperty = [string, unknown];
  * schema, not the default one, so a date stays the text the model wrote
  * (`2026-09-30`) instead of becoming a Date shown in the local time zone.
  *
+ * A nested map or list inside a value comes back in YAML flow form
+ * (`{name: A, role: B}`), formatted here rather than while rendering.
+ *
  * Returns no properties for ordinary reports, which have no frontmatter, so
  * the caller renders exactly what it always did.
  */
@@ -139,35 +148,44 @@ export function splitFrontmatter(text: string): { properties: ReportProperty[]; 
   // CRLF line endings, from a report written or synced elsewhere, would hide
   // both delimiters.
   const source = text?.replace(/\r\n/g, '\n');
-  if (!source || !source.startsWith('---\n')) return empty;
-  const end = source.indexOf('\n---', 3);
-  if (end === -1) return empty;
-  const raw = source.slice(4, end + 1);
-  const body = source.slice(end + 4).replace(/^\n+/, '');
-  let parsed: unknown;
+  const open = source && /^---[ \t]*\n/.exec(source);
+  if (!open) return empty;
+  const rest = source.slice(open[0].length);
+  // The closing delimiter is a line of its own: `----` or `---oops` is not one.
+  const close = /^---[ \t]*$/m.exec(rest);
+  if (!close) return empty;
+  const raw = rest.slice(0, close.index);
+  if (raw.length > MAX_FRONTMATTER_LENGTH) return empty;
+  const body = rest.slice(close.index + close[0].length).replace(/^\n+/, '');
+  let properties: ReportProperty[];
   try {
-    parsed = yaml.load(raw, { schema: yaml.CORE_SCHEMA });
+    const parsed: unknown = yaml.load(raw, { schema: yaml.CORE_SCHEMA });
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return empty;
+    properties = Object.entries(parsed as Record<string, unknown>)
+      .filter(
+        ([k, v]) => !HEADER_DUPLICATE_KEYS.has(k.toLowerCase()) && v !== null && v !== undefined && v !== '' &&
+          !(Array.isArray(v) && v.length === 0),
+      )
+      .map(([k, v]) => [k, Array.isArray(v) ? v.map(flowForm) : flowForm(v)]);
   } catch {
     // Unparseable frontmatter is left in the body rather than thrown away:
-    // showing it badly beats losing it silently.
+    // showing it badly beats losing it silently. So is a value nested deeper
+    // than yaml.dump can recurse, should one get past the length cap.
     return empty;
   }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return empty;
-  const properties = Object.entries(parsed as Record<string, unknown>).filter(
-    ([k, v]) => !HEADER_DUPLICATE_KEYS.has(k) && v !== null && v !== undefined && v !== '' &&
-      !(Array.isArray(v) && v.length === 0),
-  );
   return { properties, body };
 }
 
-// One value: booleans read yes/no, and a nested map or list keeps its YAML flow
-// form (`{name: A, role: B}`) rather than becoming [object Object]. The lookups
-// stay in JSX, where the i18n copy inventory counts them as rendered copy.
+function flowForm(value: unknown): unknown {
+  return value !== null && typeof value === 'object' ? yaml.dump(value, { flowLevel: 0 }).trim() : value;
+}
+
+// One value: booleans read yes/no. The lookups stay in JSX, where the i18n
+// copy inventory counts them as rendered copy.
 function PropertyText({ value }: { value: unknown }): React.ReactElement {
   if (typeof value === 'boolean') {
     return <>{value ? t('report.properties.yes') : t('report.properties.no')}</>;
   }
-  if (value !== null && typeof value === 'object') return <>{yaml.dump(value, { flowLevel: 0 }).trim()}</>;
   return <>{String(value)}</>;
 }
 

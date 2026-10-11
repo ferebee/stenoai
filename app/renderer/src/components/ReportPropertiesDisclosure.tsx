@@ -51,6 +51,7 @@ export function PropertiesToggle({
     <button
       type="button"
       aria-expanded={open}
+      aria-label={t('report.properties.toggleLabel', { count })}
       // Only while open: closed, the table is not in the DOM to point at.
       aria-controls={open ? PROPERTIES_PANEL_ID : undefined}
       data-testid="report-properties-toggle"

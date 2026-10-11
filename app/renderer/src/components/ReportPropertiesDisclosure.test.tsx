@@ -46,6 +46,7 @@ describe('report properties disclosure', () => {
     const toggle = screen.getByTestId('report-properties-toggle');
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(toggle.textContent).toBe('Properties2');
+    expect(toggle.getAttribute('aria-label')).toBe('Properties, 2');
     expect(screen.queryByTestId('report-properties')).toBeNull();
     // Nothing to point at while the table is not in the DOM.
     expect(toggle.hasAttribute('aria-controls')).toBe(false);
