@@ -121,6 +121,17 @@ class ParticipantsKeepCallersTests(unittest.TestCase):
             simple_recorder._add_callers_to_participants(Path(tmp), "stem")
             self.assertEqual(md.read_text(encoding="utf-8"), NOTE)
 
+    def test_the_snapshot_taken_after_the_merge_has_the_caller(self):
+        # The pipeline and reprocess add the caller before snapshotting, so the
+        # snapshot is the note as written; a later diff against it must not
+        # read the caller as a user edit.
+        with tempfile.TemporaryDirectory() as tmp:
+            md = self._note(tmp, [ERIKA])
+            simple_recorder._add_callers_to_participants(Path(tmp), "stem")
+            simple_recorder._write_original_snapshot(md)
+            snapshot = json.loads((Path(tmp) / "stem_original.json").read_text(encoding="utf-8"))
+            self.assertEqual(snapshot["original"]["participants"], ["Erika Mustermann"])
+
     def test_a_legacy_json_note(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "stem_summary.json"
@@ -163,6 +174,19 @@ class ApplyCallInfoCliTests(unittest.TestCase):
             # Participants sits after the Summary, and nothing else moved.
             text = md.read_text(encoding="utf-8")
             self.assertIn("pages.\n\n## Participants\n\nErika Mustermann\n\n## Key Points", text)
+
+    def test_a_late_caller_leaves_the_snapshot_alone(self):
+        # Only the writer that generated the note may replace its snapshot
+        # (app/note-snapshot.js); the caller is not an edit either.
+        with tempfile.TemporaryDirectory() as tmp:
+            md = self._with_note(tmp)
+            simple_recorder._write_original_snapshot(md)
+            snapshot_path = md.with_name("stem_original.json")
+            before = snapshot_path.read_text(encoding="utf-8")
+            result, _ = self._run(["stem", "--calls", json.dumps([ERIKA])], tmp)
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertEqual(_participants(md), ["Erika Mustermann"])
+            self.assertEqual(snapshot_path.read_text(encoding="utf-8"), before)
 
     def test_running_it_twice_changes_nothing_more(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -3693,6 +3693,9 @@ def reprocess(summary_file, regenerate_title, retranscribe):
                 md_lines.append('')
                 md_lines.append(notes_text)
             _atomic_write_text(summary_path, '\n'.join(md_lines))
+            # The caller first, so the snapshot is the note as written,
+            # caller included, the same order as the recording pipeline.
+            _add_callers_to_participants(summary_path.parent, _summary_stem(summary_path))
             _write_original_snapshot(summary_path)
         else:
             # JSON format: parse streamed markdown into structured fields
@@ -3711,7 +3714,7 @@ def reprocess(summary_file, regenerate_title, retranscribe):
             session_info.pop("notes_generated", None)
             session_info.pop("notes_stale", None)
             _atomic_write_text(summary_path, json.dumps(existing_data, indent=2))
-        _add_callers_to_participants(summary_path.parent, _summary_stem(summary_path))
+            _add_callers_to_participants(summary_path.parent, _summary_stem(summary_path))
 
         # Signal completion only AFTER the note file is fully written. The
         # renderer reads the note the instant it sees STREAM_COMPLETE, so
@@ -3784,6 +3787,10 @@ def apply_call_info(meeting_stem, calls_json, sidecar_only):
     if not sidecar_only and any(
         (output_dir / f"{meeting_stem}_summary{ext}").exists() for ext in ('.md', '.json')
     ):
+        # The note's snapshot (_write_original_snapshot) was taken before this
+        # caller arrived and is left alone: only the writer that generated the
+        # note may replace it (app/note-snapshot.js), and the caller is not an
+        # edit, so edited_fields stays as it was.
         _add_callers_to_participants(output_dir, meeting_stem)
         note_updated = True
     print(json.dumps({"success": True, "calls": len(calls), "note_updated": note_updated}))
