@@ -158,3 +158,45 @@ test('backfill writes a transcript-free note; rename moves it; external edits an
   // Never touched the developer's real data dir.
   expect(fileSig(realUserDataDir())).toBe(realDirBefore);
 });
+
+test("a call recording's numbers reach the vault copy's front matter, not the note", async ({
+  launchApp,
+  userDataDir,
+}) => {
+  test.setTimeout(120_000);
+  test.skip(!existsSync(BACKEND), 'backend bundle not built');
+
+  // Caller recognition (src/call_info.py) names callers in the note and keeps
+  // their numbers in <stem>_call.json; the vault copy lists the numbers as
+  // call_numbers. Invented data.
+  const outputDir = path.join(userDataDir, 'output');
+  mkdirSync(outputDir, { recursive: true });
+  const summaryPath = path.join(outputDir, 'callnote_summary.md');
+  writeFileSync(summaryPath, NOTE_MD.replace('Alice, Bob', 'Erika Mustermann'), 'utf8');
+  writeFileSync(
+    path.join(outputDir, 'callnote_call.json'),
+    JSON.stringify({
+      calls: [
+        { name: 'Erika Mustermann', number: '+12025550100', direction: 'incoming', service: 'phone' },
+      ],
+    }),
+    'utf8',
+  );
+  const vault = path.join(userDataDir, 'obs-vault');
+  mkdirSync(vault, { recursive: true });
+
+  const { page } = await launchApp();
+  await page.evaluate(async (v) => {
+    const s = (window as StenoWin).stenoai.settings;
+    await s.setObsidianVaultPath(v);
+    await s.setObsidianSync(true);
+  }, vault);
+
+  const targetName = '2026-07-20 Quarterly Planning.md';
+  await expect
+    .poll(() => vaultFiles(vault).includes(targetName), { timeout: 20_000, intervals: [250] })
+    .toBe(true);
+  const written = readFileSync(path.join(vault, targetName), 'utf8');
+  expect(written).toMatch(/participants:\n {2}- "Erika Mustermann"\ncall_numbers:\n {2}- "\+12025550100"\n/);
+  expect(readFileSync(summaryPath, 'utf8')).not.toContain('+12025550100');
+});

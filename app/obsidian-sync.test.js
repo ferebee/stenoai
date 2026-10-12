@@ -65,6 +65,15 @@ test('transformNote strips transcript, lifts participants, adds Obsidian props',
   assert.ok(!/we ship Friday/.test(vaultBody), 'transcript content removed');
 });
 
+test('transformNote lists the callers\' numbers as call_numbers, after participants', () => {
+  const { vaultBody } = transformNote(NOTE, {
+    stem: 's', callNumbers: ['+12025550100', '+12025550101'],
+  });
+  assert.match(vaultBody,
+    /participants:\n {2}- "Alice"\n {2}- "Bob"\ncall_numbers:\n {2}- "\+12025550100"\n {2}- "\+12025550101"\nsource: Steno/);
+  assert.ok(!/call_numbers/.test(transformNote(NOTE, { stem: 's' }).vaultBody));
+});
+
 test('sanitizeFilename strips fs-hostile chars and falls back to stem', () => {
   assert.equal(sanitizeFilename('A/B: C?', 'stemx'), 'A B C');
   assert.equal(sanitizeFilename('///', 'stemx'), 'stemx');
@@ -116,6 +125,25 @@ test('sync writes a readable file under the folder subdir', () => {
   const target = path.join(h.vault, 'Sales', '2026-07-15 Acme Q3 Planning.md');
   assert.ok(fs.existsSync(target), 'file under Sales/ with readable name');
   assert.match(fs.readFileSync(target, 'utf8'), /source: Steno/);
+  fs.rmSync(h.root, { recursive: true, force: true });
+});
+
+test("a call recording's numbers reach the vault copy, from the call sidecar", () => {
+  // Caller recognition (src/call_info.py) keeps numbers out of the note; the
+  // vault copy carries them. Invented data; one caller without a name.
+  const h = harness();
+  h.writeNote('n1', NOTE);
+  fs.writeFileSync(path.join(h.output, 'n1_call.json'), JSON.stringify({ calls: [
+    { name: 'Erika Mustermann', number: '+12025550100', direction: 'incoming', service: 'phone' },
+    { name: null, number: '+12025550101', direction: 'outgoing', service: 'phone' },
+    { name: null, number: '+12025550100', direction: 'incoming', service: 'phone' },
+  ] }));
+  h.eng.syncNoteBySummaryPath(path.join(h.output, 'n1_summary.md'));
+  const written = fs.readFileSync(path.join(h.vault, 'Sales', '2026-07-15 Acme Q3 Planning.md'), 'utf8');
+  assert.match(written, /call_numbers:\n {2}- "\+12025550100"\n {2}- "\+12025550101"\n/);
+  // A broken sidecar is ignored, not an error.
+  fs.writeFileSync(path.join(h.output, 'n1_call.json'), '{not json');
+  assert.equal(h.eng.syncNoteBySummaryPath(path.join(h.output, 'n1_summary.md')).status, 'synced');
   fs.rmSync(h.root, { recursive: true, force: true });
 });
 
