@@ -3765,8 +3765,10 @@ def _patch_summary_date(summary_path: Path, date_value: str) -> bool:
                    "and reads them before it saves.")
 def apply_call_info(meeting_stem, calls_json, sidecar_only):
     """Store the phone or FaceTime call a recording captured (src.call_info) and
-    add the caller to the note's Participants. macOS only, fed by app/main.js."""
-    from src.call_info import normalize_calls, write_calls
+    add the caller to the note's Participants. macOS only, fed by app/main.js.
+    The calls are added to those already stored, so a continued note keeps the
+    callers of its earlier recordings."""
+    from src.call_info import merge_calls, normalize_calls, read_calls, write_calls
     from src.config import get_data_dirs
 
     if not meeting_stem or meeting_stem in ('.', '..') or '/' in meeting_stem or '\\' in meeting_stem:
@@ -3782,6 +3784,7 @@ def apply_call_info(meeting_stem, calls_json, sidecar_only):
         sys.exit(1)
 
     output_dir = Path(get_data_dirs()["output"])
+    calls = merge_calls(read_calls(output_dir, meeting_stem), calls)
     write_calls(output_dir, meeting_stem, calls)
     note_updated = False
     if not sidecar_only and any(

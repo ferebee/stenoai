@@ -141,6 +141,36 @@ test('redialled at once, the next call is waited for before looking', async () =
   assert.strictEqual(applied[0].calls[0].number, '+12025550102');
 });
 
+test('a continued note gets one write at a time', async () => {
+  // Two recordings into the same note, each with its own call, found together.
+  const order = [];
+  let release;
+  const first = new Promise((resolve) => { release = resolve; });
+  const { callerId, applied } = setup({
+    history: [entry({ id: '1', number: '+12025550101', start: 0, duration: 120 }),
+      entry({ id: '2', number: '+12025550102', start: 100, duration: 120 })],
+    apply: async (stem, calls) => {
+      order.push(`start ${calls[0].number}`);
+      if (calls[0].number === '+12025550101') await first;
+      order.push(`end ${calls[0].number}`);
+    },
+  });
+  callerId.micEvent(mic('start', 0.4, 'com.apple.avconferenced'));
+  callerId.recordingStarted('note', ms(1));
+  callerId.micEvent(mic('stop', 60, 'com.apple.avconferenced'));
+  callerId.recordingStopped(ms(61));
+  callerId.micEvent({ ...mic('start', 100.4), pid: 43 });
+  callerId.recordingStarted('note', ms(101));
+  callerId.micEvent({ ...mic('stop', 160), pid: 43 });
+  callerId.recordingStopped(ms(161));
+  await new Promise((resolve) => setImmediate(resolve));
+  release();
+  await callerId.idle();
+  assert.deepStrictEqual(order,
+    ['start +12025550101', 'end +12025550101', 'start +12025550102', 'end +12025550102']);
+  assert.deepStrictEqual(applied.map((x) => x.stem), ['note', 'note']);
+});
+
 test('a recording without call audio is never looked up', async () => {
   const { callerId, imcp, applied } = setup({ history: [entry({ start: 0, duration: 60 })] });
   callerId.micEvent(mic('start', 0, 'us.zoom.xos'));

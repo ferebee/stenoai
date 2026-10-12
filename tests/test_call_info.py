@@ -12,7 +12,8 @@ from click.testing import CliRunner
 
 import simple_recorder
 from src.call_info import (
-    call_sidecar_path, meeting_context, normalize_calls, read_calls, with_callers, write_calls,
+    call_sidecar_path, meeting_context, merge_calls, normalize_calls, read_calls, with_callers,
+    write_calls,
 )
 from src.config import Config
 from src.summarizer import OllamaSummarizer
@@ -75,6 +76,18 @@ class CallInfoTests(unittest.TestCase):
                          ["Erika Mustermann", "+12025550101", "Max Mustermann"])
         self.assertEqual(with_callers([ERIKA], ["erika mustermann"]), ["erika mustermann"])
         self.assertEqual(with_callers([], ["Max Mustermann"]), ["Max Mustermann"])
+        # Callers lead in the order of the calls, wherever they were listed.
+        self.assertEqual(with_callers([ERIKA, UNKNOWN], ["+12025550101", "Erika Mustermann"]),
+                         ["Erika Mustermann", "+12025550101"])
+
+    def test_merge_calls_adds_new_calls_and_updates_known_ones(self):
+        self.assertEqual(merge_calls([ERIKA], [UNKNOWN]), [ERIKA, UNKNOWN])
+        self.assertEqual(merge_calls([ERIKA, UNKNOWN], [ERIKA]), [ERIKA, UNKNOWN])
+        # Found again without a name (Contacts off this time): the name stays.
+        self.assertEqual(merge_calls([ERIKA], [{**ERIKA, "name": None}]), [ERIKA])
+        named = {**UNKNOWN, "name": "Max Mustermann"}
+        self.assertEqual(merge_calls([UNKNOWN], [named]), [named])
+        self.assertEqual(merge_calls([], [ERIKA]), [ERIKA])
 
     def test_meeting_context_names_the_other_party(self):
         text = meeting_context([ERIKA])
@@ -193,8 +206,25 @@ class ApplyCallInfoCliTests(unittest.TestCase):
             md = self._with_note(tmp)
             self._run(["stem", "--calls", json.dumps([ERIKA])], tmp)
             once = md.read_text(encoding="utf-8")
-            self._run(["stem", "--calls", json.dumps([ERIKA])], tmp)
+            result, output_dir = self._run(["stem", "--calls", json.dumps([ERIKA])], tmp)
             self.assertEqual(md.read_text(encoding="utf-8"), once)
+            self.assertEqual(read_calls(output_dir, "stem"), [ERIKA])
+
+    def test_a_continued_note_keeps_the_earlier_caller(self):
+        # The first recording was a call with Erika; the continuation, recorded
+        # into the same note, a call with another number.
+        with tempfile.TemporaryDirectory() as tmp:
+            md = self._with_note(tmp)
+            self._run(["stem", "--calls", json.dumps([ERIKA])], tmp)
+            result, output_dir = self._run(["stem", "--calls", json.dumps([UNKNOWN])], tmp)
+            self.assertEqual(_last_json(result.output),
+                             {"success": True, "calls": 2, "note_updated": True})
+            self.assertEqual(read_calls(output_dir, "stem"), [ERIKA, UNKNOWN])
+            self.assertEqual(_participants(md), ["Erika Mustermann", "+12025550101"])
+            # And the next speaker rewrite keeps both.
+            simple_recorder._update_summary_participants(output_dir, "stem", ["Max Mustermann"])
+            self.assertEqual(_participants(md),
+                             ["Erika Mustermann", "+12025550101", "Max Mustermann"])
 
     def test_sidecar_only_leaves_the_note_alone(self):
         with tempfile.TemporaryDirectory() as tmp:

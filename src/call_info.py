@@ -11,8 +11,10 @@ Electron app finds the call in the Mac's call history through iMCP
                 "started_at": "2026-03-02T14:00:00Z"}]}
 
 ``name`` is the Contacts name and may be null; ``number`` may be null for a
-withheld number. That file is the source of truth and nothing else rewrites
-it. Two things are derived from it:
+withheld number. A continued note gets the calls of each recording that went
+into it: ``apply-call-info`` adds to the stored calls (``merge_calls``), and
+nothing else writes the file. It is the source of truth, and two things are
+derived from it:
 
 - Participants: every caller is listed, by name or else by number, and
   ``_update_summary_participants`` adds them back whenever the speaker side
@@ -89,21 +91,46 @@ def write_calls(output_dir, meeting_stem: str, calls: list) -> Path:
     return path
 
 
+def _call_key(call: dict) -> tuple:
+    """What makes two entries the same call: when it started, and with whom."""
+    return (call.get("started_at"), call.get("number") or call.get("name"))
+
+
+def merge_calls(stored: list, new: list) -> list:
+    """``stored`` with the calls in ``new`` added. A call already stored is
+    updated in place, keeping its name if this time none was found."""
+    merged = list(stored)
+    index = {_call_key(call): i for i, call in enumerate(merged)}
+    for call in new:
+        key = _call_key(call)
+        if key in index:
+            old = merged[index[key]]
+            merged[index[key]] = {**call, "name": call.get("name") or old.get("name")}
+        else:
+            index[key] = len(merged)
+            merged.append(call)
+    return merged
+
+
 def caller_label(call: dict) -> Optional[str]:
     """How a caller appears in Participants: the Contacts name, else the number."""
     return call.get("name") or call.get("number")
 
 
 def with_callers(calls: list, participant_names: list) -> list:
-    """``participant_names`` with every caller not already in it, callers first."""
-    existing = {str(n).casefold() for n in participant_names or []}
-    callers = []
+    """``participant_names`` with the callers first, in the order of the calls,
+    each once and as already spelled there if it is."""
+    names = list(participant_names or [])
+    spelled = {}
+    for name in names:
+        spelled.setdefault(str(name).casefold(), name)
+    callers, seen = [], set()
     for call in calls:
         label = caller_label(call)
-        if label and label.casefold() not in existing:
-            existing.add(label.casefold())
-            callers.append(label)
-    return callers + list(participant_names or [])
+        if label and label.casefold() not in seen:
+            seen.add(label.casefold())
+            callers.append(spelled.get(label.casefold(), label))
+    return callers + [n for n in names if str(n).casefold() not in seen]
 
 
 def meeting_context(calls: list) -> str:

@@ -18,6 +18,9 @@
 // also has a record while it runs, so a recording stopped mid-call is tried
 // once at once; any other call has to end first.
 //
+// A continued note gets the calls of each recording that went into it: the
+// backend adds them to those it has stored, one write per note at a time.
+//
 // Delivery never races the note's own processing: while a job for the note is
 // queued or running, the call is only stored (the backend reads it before it
 // saves); when the job finishes, it is applied to the note. Applying twice is
@@ -54,6 +57,7 @@ class CallerId {
     this._sessions = [];    // call audio on this Mac: { key, startedAt, endedAt }
     this._recordings = [];  // { stem, startedAt, stoppedAt, calls, tried, finalApply }
     this._inflight = new Set();
+    this._writes = new Map(); // stem -> the last apply-call-info queued for it
   }
 
   /** Resolves once no lookup is running (for tests and orderly shutdown). */
@@ -170,12 +174,15 @@ class CallerId {
     await this._apply(rec, busy);
   }
 
-  async _apply(rec, sidecarOnly) {
-    try {
-      await this.applyCallInfo(rec.stem, [...rec.calls.values()], { sidecarOnly });
-    } catch (error) {
-      this.log(`[caller-id] apply-call-info failed: ${error?.message || error}`);
-    }
+  // One write per note at a time: the backend adds these calls to those it has
+  // stored, and two writes at once could each miss the other's.
+  _apply(rec, sidecarOnly) {
+    const write = (this._writes.get(rec.stem) || Promise.resolve())
+      .then(() => this.applyCallInfo(rec.stem, [...rec.calls.values()], { sidecarOnly }))
+      .catch((error) => this.log(`[caller-id] apply-call-info failed: ${error?.message || error}`));
+    this._writes.set(rec.stem, write);
+    write.then(() => { if (this._writes.get(rec.stem) === write) this._writes.delete(rec.stem); });
+    return write;
   }
 
   _prune() {
