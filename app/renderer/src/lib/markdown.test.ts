@@ -187,13 +187,32 @@ describe('splitFrontmatter', () => {
     expect(properties).toEqual([['client', 'A']]);
   });
 
-  test('a nested map or list comes back in YAML flow form', () => {
-    const { properties } = splitFrontmatter(
-      '---\ncontact: {name: Erika Mustermann, role: Office manager}\nsteps:\n  - [restart, retry]\n  - plain\n---\n\nprose',
-    );
+  test('a nested map or list leaves the frontmatter in the body', () => {
+    for (const nested of ['contact: {name: Erika Mustermann}', 'steps:\n  - [restart, retry]']) {
+      const input = `---\nclient: A\n${nested}\n---\n\nprose`;
+      expect(splitFrontmatter(input)).toEqual({ properties: [], body: input });
+    }
+  });
+
+  test('anchors are refused, so aliases cannot expand', () => {
+    // About 3,900 characters that, with aliases expanded and formatted, came
+    // to about 135 million.
+    const s = 'x'.repeat(1500);
+    const b = Array(300).fill('*s').join(', ');
+    const c = Array(300).fill('*b').join(', ');
+    const input = `---\ns: &s ${s}\nb: &b [${b}]\nc: [${c}]\n---\n\nprose`;
+    expect(splitFrontmatter(input)).toEqual({ properties: [], body: input });
+    // An alias with no anchor to point at does not parse either.
+    const dangling = '---\nb: [*s, *s]\n---\n\nprose';
+    expect(splitFrontmatter(dangling)).toEqual({ properties: [], body: dangling });
+  });
+
+  test('& and * inside a value are text, not anchors or aliases', () => {
+    const { properties } = splitFrontmatter('---\nteam: R&D\nnote: "&not an anchor, *nor an alias"\nflag: a*b\n---\n\nprose');
     expect(properties).toEqual([
-      ['contact', '{name: Erika Mustermann, role: Office manager}'],
-      ['steps', ['[restart, retry]', 'plain']],
+      ['team', 'R&D'],
+      ['note', '&not an anchor, *nor an alias'],
+      ['flag', 'a*b'],
     ]);
   });
 

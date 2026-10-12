@@ -3,7 +3,7 @@ import ReactMarkdown, { type ExtraProps } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { CHART_COPY, parseChatChart } from '@/lib/chatChart';
 import { ChartErrorBoundary } from '@/components/ChartErrorBoundary';
-import yaml from 'js-yaml';
+import yaml, { type EventType, type State } from 'js-yaml';
 import { t } from '@/i18n';
 
 const ChatChart = React.lazy(() => import('@/components/ChatChart'));
@@ -123,9 +123,26 @@ export function renderMarkdown(text: string): React.ReactNode {
 const HEADER_DUPLICATE_KEYS = new Set(['title', 'date', 'duration_seconds', 'duration', 'language']);
 
 // Frontmatter longer than this stays in the body. Real reports' frontmatter
-// runs to about 2 KB; the cap keeps a chain of YAML aliases, each nesting the
-// previous value, far too short to make formatting slow or overflow the stack.
-const MAX_FRONTMATTER_LENGTH = 16_000;
+// runs to about 2 KB, so this leaves room for templates that ask for much
+// more. With anchors refused and values flat (below), what is parsed and
+// shown is no larger than the text, so this bounds both.
+const MAX_FRONTMATTER_LENGTH = 30_000;
+
+// js-yaml 4 cannot turn aliases off (5.x has `maxAliases: 0`), and an alias
+// expands to a full copy wherever it is used: a few thousand characters of
+// nested aliases can stand for hundreds of millions. The parse listener sees
+// each node as it closes, with the anchor it defines. An alias can only point
+// at an anchor, so refusing anchors refuses aliases.
+function refuseAnchors(event: EventType, state: State): void {
+  if (event === 'close' && (state as State & { anchor: string | null }).anchor !== null) {
+    throw new Error(); // caught in splitFrontmatter, never shown
+  }
+}
+
+// The shapes Obsidian's properties take: text, numbers, booleans, and lists of
+// those.
+const isScalar = (value: unknown) => value === null || typeof value !== 'object';
+const isFlat = (value: unknown) => isScalar(value) || (Array.isArray(value) && value.every(isScalar));
 
 export type ReportProperty = [string, unknown];
 
@@ -137,8 +154,8 @@ export type ReportProperty = [string, unknown];
  * schema, not the default one, so a date stays the text the model wrote
  * (`2026-09-30`) instead of becoming a Date shown in the local time zone.
  *
- * A nested map or list inside a value comes back in YAML flow form
- * (`{name: A, role: B}`), formatted here rather than while rendering.
+ * Properties are flat, as Obsidian's are. Frontmatter with a nested map or
+ * list stays in the body, and so does frontmatter with an anchor.
  *
  * Returns no properties for ordinary reports, which have no frontmatter, so
  * the caller renders exactly what it always did.
@@ -159,25 +176,19 @@ export function splitFrontmatter(text: string): { properties: ReportProperty[]; 
   const body = rest.slice(close.index + close[0].length).replace(/^\n+/, '');
   let properties: ReportProperty[];
   try {
-    const parsed: unknown = yaml.load(raw, { schema: yaml.CORE_SCHEMA });
+    const parsed: unknown = yaml.load(raw, { schema: yaml.CORE_SCHEMA, listener: refuseAnchors });
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return empty;
-    properties = Object.entries(parsed as Record<string, unknown>)
-      .filter(
-        ([k, v]) => !HEADER_DUPLICATE_KEYS.has(k.toLowerCase()) && v !== null && v !== undefined && v !== '' &&
-          !(Array.isArray(v) && v.length === 0),
-      )
-      .map(([k, v]) => [k, Array.isArray(v) ? v.map(flowForm) : flowForm(v)]);
+    properties = Object.entries(parsed as Record<string, unknown>).filter(
+      ([k, v]) => !HEADER_DUPLICATE_KEYS.has(k.toLowerCase()) && v !== null && v !== undefined && v !== '' &&
+        !(Array.isArray(v) && v.length === 0),
+    );
   } catch {
     // Unparseable frontmatter is left in the body rather than thrown away:
-    // showing it badly beats losing it silently. So is a value nested deeper
-    // than yaml.dump can recurse, should one get past the length cap.
+    // showing it badly beats losing it silently.
     return empty;
   }
+  if (!properties.every(([, v]) => isFlat(v))) return empty;
   return { properties, body };
-}
-
-function flowForm(value: unknown): unknown {
-  return value !== null && typeof value === 'object' ? yaml.dump(value, { flowLevel: 0 }).trim() : value;
 }
 
 // One value: booleans read yes/no. The lookups stay in JSX, where the i18n
