@@ -3794,8 +3794,7 @@ def apply_call_info(meeting_stem, calls_json, sidecar_only):
         # caller arrived and is left alone: only the writer that generated the
         # note may replace it (app/note-snapshot.js), and the caller is not an
         # edit, so edited_fields stays as it was.
-        _add_callers_to_participants(output_dir, meeting_stem)
-        note_updated = True
+        note_updated = _add_callers_to_participants(output_dir, meeting_stem)
     print(json.dumps({"success": True, "calls": len(calls), "note_updated": note_updated}))
 
 
@@ -8177,12 +8176,13 @@ def _set_call_context(summarizer, output_dir, meeting_stem: str) -> None:
     summarizer.meeting_context = meeting_context(read_calls(output_dir, meeting_stem))
 
 
-def _add_callers_to_participants(output_dir, meeting_stem: str) -> None:
+def _add_callers_to_participants(output_dir, meeting_stem: str) -> bool:
     """Put the recording's callers (src.call_info) into Participants, keeping
-    whoever is listed already. A no-op when the recording captured no call."""
+    whoever is listed already. A no-op when the recording captured no call.
+    Returns whether the note is now current, as _update_summary_participants."""
     from src.call_info import read_calls
     if not read_calls(output_dir, meeting_stem):
-        return
+        return True
     output_dir = Path(output_dir)
     json_path = output_dir / f"{meeting_stem}_summary.json"
     md_path = output_dir / f"{meeting_stem}_summary.md"
@@ -8193,8 +8193,10 @@ def _add_callers_to_participants(output_dir, meeting_stem: str) -> None:
         elif md_path.exists():
             current = _parse_meeting_markdown(md_path).get("participants") or []
     except (OSError, ValueError) as e:
+        # Not knowing who is listed, writing the callers alone would drop them.
         logger.warning(f"Could not read participants for {meeting_stem}: {e}")
-    _update_summary_participants(output_dir, meeting_stem, current)
+        return False
+    return _update_summary_participants(output_dir, meeting_stem, current)
 
 
 def _update_summary_participants(

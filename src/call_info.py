@@ -43,6 +43,11 @@ def call_sidecar_path(output_dir, meeting_stem: str) -> Path:
     return Path(output_dir) / f"{meeting_stem}{CALL_SIDECAR_SUFFIX}"
 
 
+def _choice(value, allowed) -> Optional[str]:
+    """``value`` if it is one of ``allowed``, else None (also for a list or object)."""
+    return value if isinstance(value, str) and value in allowed else None
+
+
 def _text(value) -> Optional[str]:
     if not isinstance(value, str):
         return None
@@ -63,8 +68,8 @@ def normalize_calls(raw) -> list:
         call = {
             "name": _text(entry.get("name")),
             "number": _text(entry.get("number")),
-            "direction": entry.get("direction") if entry.get("direction") in _DIRECTIONS else None,
-            "service": entry.get("service") if entry.get("service") in _SERVICES else None,
+            "direction": _choice(entry.get("direction"), _DIRECTIONS),
+            "service": _choice(entry.get("service"), _SERVICES),
             "started_at": _text(entry.get("started_at")),
         }
         if call["name"] or call["number"]:

@@ -62,6 +62,9 @@ class CallInfoTests(unittest.TestCase):
                                     "service": None, "started_at": None})
         self.assertEqual(len(calls), 2)
         self.assertEqual(normalize_calls("nonsense"), [])
+        # A list or object where a word belongs is dropped, not an error.
+        odd = normalize_calls([{**ERIKA, "service": ["phone"], "direction": {"in": 1}}])
+        self.assertEqual((odd[0]["service"], odd[0]["direction"]), (None, None))
 
     def test_read_calls_is_empty_without_a_sidecar_or_with_a_broken_one(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -133,6 +136,15 @@ class ParticipantsKeepCallersTests(unittest.TestCase):
             md = self._note(tmp, [])
             simple_recorder._add_callers_to_participants(Path(tmp), "stem")
             self.assertEqual(md.read_text(encoding="utf-8"), NOTE)
+
+    def test_a_note_it_cannot_read_is_left_alone(self):
+        # Not knowing who is listed, it must not write the caller alone.
+        with tempfile.TemporaryDirectory() as tmp:
+            write_calls(tmp, "stem", [ERIKA])
+            path = Path(tmp) / "stem_summary.json"
+            path.write_text("{not json", encoding="utf-8")
+            self.assertIs(simple_recorder._add_callers_to_participants(Path(tmp), "stem"), False)
+            self.assertEqual(path.read_text(encoding="utf-8"), "{not json")
 
     def test_the_snapshot_taken_after_the_merge_has_the_caller(self):
         # The pipeline and reprocess add the caller before snapshotting, so the
@@ -232,6 +244,14 @@ class ApplyCallInfoCliTests(unittest.TestCase):
             result, output_dir = self._run(["stem", "--sidecar-only", "--calls", json.dumps([ERIKA])], tmp)
             self.assertEqual(_last_json(result.output)["note_updated"], False)
             self.assertEqual(md.read_text(encoding="utf-8"), NOTE)
+            self.assertEqual(read_calls(output_dir, "stem"), [ERIKA])
+
+    def test_a_note_it_could_not_update_is_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._with_note(tmp)
+            with mock.patch.object(simple_recorder, "_update_summary_participants", return_value=False):
+                result, output_dir = self._run(["stem", "--calls", json.dumps([ERIKA])], tmp)
+            self.assertEqual(_last_json(result.output)["note_updated"], False)
             self.assertEqual(read_calls(output_dir, "stem"), [ERIKA])
 
     def test_before_the_note_exists_it_only_stores_the_call(self):
