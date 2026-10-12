@@ -93,9 +93,10 @@ tests; `STENOAI_DIARIZE_MODEL_DIR` is the lower-level sidecar override.
 ### Caller recognition (macOS only, opt-in)
 Settings -> General -> "Identify phone callers" (`caller_id_enabled`, off by
 default) puts the other party of a phone or FaceTime call into a note's
-+Participants, by Contacts name or else by number. Steno does not access the call-history database directly:
-+iMCP (https://imcp.app), a separate menu bar app the user
-installs and grants access, serves it over MCP. `app/imcp-client.js` connects
+Participants, by Contacts name or else by number. Steno does not access the
+call-history database directly: iMCP (https://imcp.app), a separate menu bar
+app the user installs and grants access, serves it over MCP.
+`app/imcp-client.js` connects
 through iMCP's bundled `imcp-server` bridge (`@modelcontextprotocol/client`)
 and reports a status for Settings; `app/caller-id.js` follows the mic
 monitor's call audio (`com.apple.avconferenced`) and the recordings, and once a
