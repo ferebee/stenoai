@@ -199,7 +199,7 @@ class ImcpClient extends EventEmitter {
     let connected = false;
     client.onclose = () => this._lost(client, connected);
     this._client = client;
-    this._watchPending(client);
+    const handshakeDone = this._watchPending(client);
     try {
       // iMCP speaks the classic initialize handshake; skip the newer probe.
       await client.connect(transport, { prior: { kind: 'legacy' }, timeout: CONNECT_TIMEOUT_MS });
@@ -214,7 +214,7 @@ class ImcpClient extends EventEmitter {
       return;
     }
     connected = true;
-    clearInterval(this._pollTimer);
+    handshakeDone();
     this._attempt = 0;
     this._refusals = 0;
     client.setNotificationHandler('notifications/tools/list_changed', () => this._refreshTools(client));
@@ -222,14 +222,23 @@ class ImcpClient extends EventEmitter {
   }
 
   // While initialize is pending, tell "not running" from "awaiting approval".
+  // Returns the function that ends this once the handshake is done.
   _watchPending(client) {
     clearInterval(this._pollTimer);
+    let done = false;
     const check = async () => {
-      if (this._client !== client || this._status === STATUS.READY || this._status === STATUS.PHONE_OFF) return;
-      this._setStatus(await this.isAppRunning() ? STATUS.AWAITING_APPROVAL : STATUS.NOT_RUNNING);
+      if (done || this._client !== client) return;
+      const running = await this.isAppRunning();
+      // The handshake may have completed, and the status moved on, meanwhile.
+      if (done || this._client !== client) return;
+      this._setStatus(running ? STATUS.AWAITING_APPROVAL : STATUS.NOT_RUNNING);
     };
     check();
     this._pollTimer = setInterval(check, this.pendingPollMs);
+    return () => {
+      done = true;
+      clearInterval(this._pollTimer);
+    };
   }
 
   async _refreshTools(client) {
@@ -243,6 +252,9 @@ class ImcpClient extends EventEmitter {
       this.emit('status', this.status);
     } catch (error) {
       this.log(`[imcp] tools/list failed: ${error?.message || error}`);
+      // Without the tool list the status is unknown. Start over, through the
+      // reconnect that closing sets off, rather than keep the last status.
+      if (this._client === client) await client.close().catch(() => {});
     }
   }
 

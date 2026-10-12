@@ -13,13 +13,17 @@ const MOCK = path.join(__dirname, '..', 'e2e', 'fixtures', 'mock-imcp-server.js'
 const MOCK_ENV = ['STENOAI_IMCP_SERVER', 'MOCK_IMCP_TOOLS', 'MOCK_IMCP_CALLS', 'MOCK_IMCP_CONTACTS', 'MOCK_IMCP_REFUSE'];
 
 const clients = [];
+const tempDirs = [];
 afterEach(async () => {
   await Promise.all(clients.splice(0).map((c) => c.stop()));
   for (const key of MOCK_ENV) delete process.env[key];
+  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
 function writeJson(value) {
-  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'imcp-test-')), 'data.json');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'imcp-test-'));
+  tempDirs.push(dir);
+  const file = path.join(dir, 'data.json');
   fs.writeFileSync(file, JSON.stringify(value));
   return file;
 }
@@ -106,13 +110,15 @@ test('not macOS', () => {
   assert.strictEqual(client.status.state, STATUS.UNSUPPORTED);
 });
 
-// A fake SDK client, for the states the mock bridge cannot hold still.
-function fakeSdkClient({ connect }) {
+// A fake SDK client, for the states the mock bridge cannot hold still. Closing
+// it calls onclose, as the SDK's does.
+function fakeSdkClient({ connect, listTools }) {
   return {
     connect,
-    close: async () => {},
+    async close() { this.onclose?.(); },
     setNotificationHandler: () => {},
-    listTools: async () => ({ tools: [{ name: 'phone_calls_fetch' }, { name: 'contacts_search' }] }),
+    listTools: listTools
+      || (async () => ({ tools: [{ name: 'phone_calls_fetch' }, { name: 'contacts_search' }] })),
   };
 }
 
@@ -148,6 +154,44 @@ test('a dropped connection is re-established', async () => {
   await waitFor(client, STATUS.READY);
   made[0].onclose(); // iMCP quit: the bridge exited
   assert.notStrictEqual(client.status.state, STATUS.READY);
+  await waitFor(client, STATUS.READY);
+  assert.strictEqual(made.length, 2);
+});
+
+test('a process probe that answers after the handshake does not undo ready', async () => {
+  let answer;
+  const client = new ImcpClient({
+    platform: 'darwin', findServer: () => '/bin/true', pendingPollMs: 60000,
+    isAppRunning: () => new Promise((resolve) => { answer = resolve; }),
+    createClient: () => fakeSdkClient({ connect: async () => {} }),
+    createTransport: () => ({}),
+  });
+  clients.push(client);
+  client.start();
+  await waitFor(client, STATUS.READY);
+  answer(true); // pgrep, started before the handshake finished, answers now
+  await new Promise((r) => setTimeout(r, 10));
+  assert.strictEqual(client.status.state, STATUS.READY);
+});
+
+test('a failed tool list starts the connection over', async () => {
+  const made = [];
+  const client = new ImcpClient({
+    platform: 'darwin', findServer: () => '/bin/true', retryDelaysMs: [20],
+    isAppRunning: async () => true,
+    createClient: () => {
+      const first = made.length === 0;
+      const sdk = fakeSdkClient({
+        connect: async () => {},
+        listTools: first ? async () => { throw new Error('transient'); } : undefined,
+      });
+      made.push(sdk);
+      return sdk;
+    },
+    createTransport: () => ({}),
+  });
+  clients.push(client);
+  client.start();
   await waitFor(client, STATUS.READY);
   assert.strictEqual(made.length, 2);
 });
