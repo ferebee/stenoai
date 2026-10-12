@@ -5,7 +5,7 @@ import { realUserDataDir, fileSig } from '../fixtures/real-user-data';
 import { readUserConfig, writeUserConfig } from '../fixtures/user-config';
 
 /**
- * T2 — caller recognition (macOS): the "Identify phone callers" setting persists
+ * T2 — caller recognition (macOS): the "Identify call participants" setting persists
  * to config.json, and with it on, Steno connects to iMCP and reports what is
  * missing there. iMCP is replaced by e2e/fixtures/mock-imcp-server.js through
  * STENOAI_IMCP_SERVER, so nothing reads a real call history or Contacts.

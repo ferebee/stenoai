@@ -1,4 +1,6 @@
+import * as React from 'react';
 import { Button } from '@/components/ui/button';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Switch } from '@/components/ui/switch';
 import { useCallerIdSetting, useSetCallerId } from '@/hooks/useSettings';
 import { t } from '@/i18n';
@@ -58,9 +60,11 @@ function statusText(data: CallerIdSettings): string | null {
 }
 
 /**
- * "Identify phone callers": names the caller on notes of phone and FaceTime
- * calls through iMCP (app/caller-id.js). macOS only; renders nothing elsewhere,
- * not even while main's answer is on its way.
+ * "Identify call participants": names the caller on notes of phone and
+ * FaceTime calls through iMCP (app/caller-id.js). macOS only; renders nothing
+ * elsewhere, not even while main's answer is on its way. Turned on only after
+ * the user acknowledges that caller names reach the AI model, which may be a
+ * cloud provider's.
  */
 export function CallerIdRow() {
   return isMac ? <CallerIdSetting /> : null;
@@ -69,6 +73,7 @@ export function CallerIdRow() {
 function CallerIdSetting() {
   const setting = useCallerIdSetting();
   const setCallerId = useSetCallerId();
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
   const data = setting.data;
   if (data && !data.supported) return null;
 
@@ -77,48 +82,65 @@ function CallerIdSetting() {
   const offerDownload = enabled && data?.status.state === 'not-installed';
 
   return (
-    <SettingRow
-      label={t('settings.general.callerId.label')}
-      align="start"
-      description={
-        <>
-          <Description />
-          {status && (
-            <span className="mt-1 block" data-testid="caller-id-status">
-              {status}
-            </span>
-          )}
-          {offerDownload && (
-            <span className="mt-2 flex flex-wrap items-center gap-3">
-              <Button
-                variant="outline"
-                size="sm"
-                className={COMPACT_BTN}
-                onClick={() => void ipc().settings.openImcpDownload()}
-              >
-                {t('settings.general.callerId.getImcp')}
-              </Button>
-              <span>{t('settings.general.callerId.homebrewHint', { command: data.homebrew })}</span>
-            </span>
-          )}
-          {setting.isError && (
-            <span className="mt-1 block">{t('settings.general.callerId.loadError')}</span>
-          )}
-          {setCallerId.isError && (
-            <span className="mt-1 block" role="alert">
-              {t('settings.general.callerId.saveError')}
-            </span>
-          )}
-        </>
-      }
-    >
-      <Switch
-        checked={enabled}
-        onCheckedChange={(v) => setCallerId.mutate(v)}
-        disabled={data === undefined || setCallerId.isPending}
-        aria-label={t('settings.general.callerId.label')}
-        data-testid="caller-id-toggle"
+    <>
+      <SettingRow
+        label={t('settings.general.callerId.label')}
+        align="start"
+        description={
+          <>
+            <Description />
+            {status && (
+              <span className="mt-1 block" data-testid="caller-id-status">
+                {status}
+              </span>
+            )}
+            {offerDownload && (
+              <span className="mt-2 flex flex-wrap items-center gap-3">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className={COMPACT_BTN}
+                  onClick={() => void ipc().settings.openImcpDownload()}
+                >
+                  {t('settings.general.callerId.getImcp')}
+                </Button>
+                <span>
+                  {t('settings.general.callerId.homebrewHint', { command: data.homebrew })}
+                </span>
+              </span>
+            )}
+            {setting.isError && (
+              <span className="mt-1 block">{t('settings.general.callerId.loadError')}</span>
+            )}
+            {setCallerId.isError && (
+              <span className="mt-1 block" role="alert">
+                {t('settings.general.callerId.saveError')}
+              </span>
+            )}
+          </>
+        }
+      >
+        <Switch
+          checked={enabled}
+          // Turning it on waits for the dialog; turning it off saves at once.
+          onCheckedChange={(v) => (v ? setConfirmOpen(true) : setCallerId.mutate(false))}
+          disabled={data === undefined || setCallerId.isPending}
+          aria-label={t('settings.general.callerId.label')}
+          data-testid="caller-id-toggle"
+        />
+      </SettingRow>
+      <ConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title={t('settings.general.callerId.consent.title')}
+        description={t('settings.general.callerId.consent.body')}
+        cancelLabel={t('settings.general.callerId.consent.disable')}
+        confirmLabel={t('settings.general.callerId.consent.confirm')}
+        onConfirm={() => {
+          setCallerId.mutate(true);
+          setConfirmOpen(false);
+        }}
       />
-    </SettingRow>
+    </>
   );
 }

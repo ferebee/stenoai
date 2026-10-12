@@ -92,8 +92,8 @@
   "noteShare.notesMarkdown": "Share notes as .md…",
   "noteShare.transcript": "Share transcript…",
   "noteShare.saveNotesMarkdown": "Save notes as .md…",
-  "settings.general.callerId.label": "Identify phone callers",
-  "settings.general.callerId.description": "Add the caller to notes of phone and FaceTime calls, by Contacts name or by number. Requires the free {{app}} to read this Mac's call history and Contacts. With a cloud provider, the caller's name, or the number if there is no name, is sent along with the transcript.",
+  "settings.general.callerId.label": "Identify call participants",
+  "settings.general.callerId.description": "Capture the name or number of phone and FaceTime call participants using the free {{app}}.",
   "settings.general.callerId.imcpLink": "iMCP.app",
   "settings.general.callerId.status.notInstalled": "Install iMCP to use this.",
   "settings.general.callerId.status.notRunning": "Open iMCP to continue.",
@@ -106,5 +106,9 @@
   "settings.general.callerId.getImcp": "Get iMCP",
   "settings.general.callerId.homebrewHint": "Or with Homebrew: {{command}}",
   "settings.general.callerId.loadError": "Could not load the caller setting. Try again.",
-  "settings.general.callerId.saveError": "Could not change the caller setting. Try again."
+  "settings.general.callerId.saveError": "Could not change the caller setting. Try again.",
+  "settings.general.callerId.consent.title": "Identify callers",
+  "settings.general.callerId.consent.body": "iMCP will read the Mac's local call and Contacts databases. Caller names will be visible to the LLM, including cloud models, when they summarize the transcript. Numbers are saved, but not added to the transcript.",
+  "settings.general.callerId.consent.disable": "Disable",
+  "settings.general.callerId.consent.confirm": "I understand"
 }
