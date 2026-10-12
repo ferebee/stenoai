@@ -12,15 +12,25 @@
 //  - Every record existed within a second of hanging up.
 //  - A record's start is reliable. Its final duration is not: it came out at
 //    about double the real length on every ended call. So the duration is used
-//    only to tell an ended call from a running one, and as a generous bound.
+//    to tell an ended call from a running one, and as a bound read both ways.
 //  - A call answered on the iPhone that never came to the Mac keeps 0 for good.
+//
+// Back-to-back calls: read at face value, a doubled duration lets the call
+// before reach into the next one. In historical call data, a call followed
+// closely by the next overlapped it at its stored duration, but not at half of
+// it. Read as doubled, then, a call that ended before this call's audio began
+// is not this call.
 
 // The record's start is the moment the call connected; the call's audio reaches
 // the Mac at the same moment or later. Seconds, since iMCP drops fractions.
 const START_TOLERANCE_MS = 5000;
-// An ended call must have lasted until its audio left the Mac. Its duration only
-// ever errs long, so this never rejects the right call; it rejects an earlier
-// call that ended before this one began.
+// An ended call must have lasted until its audio left the Mac, and, with its
+// duration read as doubled, must not have ended before its audio arrived.
+// Measured, the duration only ever errs long, so neither check rejects the
+// right call; together they reject an earlier call that ended before this one
+// began. Were the doubling to go away, the second would cost the caller only of
+// a call moved to the Mac after more than half its length, never name the
+// wrong one.
 const END_TOLERANCE_MS = 10000;
 
 const SERVICES = {
@@ -59,7 +69,8 @@ function normaliseCall(entry) {
  *  - a call answered on this Mac, ended or not: started within seconds of the
  *    audio, still at duration 0 while it runs;
  *  - once the audio has ended, any call that started before the audio did and
- *    lasted until the audio ended.
+ *    lasted until the audio ended, but had not ended, by half its stored
+ *    duration, before the audio began.
  * Of those, the one that started last. Missed calls never match.
  */
 function matchCall(entries, audio) {
@@ -77,7 +88,8 @@ function matchCall(entries, audio) {
       && Math.abs(start - audioStart) <= START_TOLERANCE_MS;
     const endedWithAudio = audioEnd !== null
       && call.durationSeconds > 0
-      && start + call.durationSeconds * 1000 >= audioEnd - END_TOLERANCE_MS;
+      && start + call.durationSeconds * 1000 >= audioEnd - END_TOLERANCE_MS
+      && start + call.durationSeconds * 500 >= audioStart - END_TOLERANCE_MS;
     if (!answeredHere && !endedWithAudio) continue;
 
     if (!best || start > best.startedAt.getTime()) best = call;

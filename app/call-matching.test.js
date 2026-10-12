@@ -84,6 +84,18 @@ test('an earlier call that ended before this one began is not taken in its place
   assert.strictEqual(matchCall(calls, { startedAt: at(30), endedAt: at(600) }), null);
 });
 
+test('back to back: the call before is not taken for the next one', () => {
+  // Call A 10:00 to 10:10, stored as about 20 minutes. Call B placed on the
+  // iPhone at 10:11:20 and moved to the Mac: audio 10:12 to 10:15. At face
+  // value A reaches past B's audio; read as doubled it ended two minutes before.
+  const a = entry({ id: '1', number: '+12025550101', start: -720, duration: 1205 });
+  const b = entry({ id: '2', number: '+12025550102', type: 'outgoing', start: -40, duration: 440 });
+  const audio = { startedAt: at(0), endedAt: at(180) };
+  // B's record is written only once B has ended, so a lookup can see A alone.
+  assert.strictEqual(matchCall([a], audio), null);
+  assert.strictEqual(matchCall([b, a], audio).number, '+12025550102');
+});
+
 test('a missed call never matches', () => {
   const calls = [entry({ type: 'missed', start: 0, duration: 0 })];
   assert.strictEqual(matchCall(calls, { startedAt: at(0.4), endedAt: null }), null);

@@ -7,12 +7,16 @@
 // has stopped, and the call's audio has ended, it finds the call in the history
 // (call-matching.js), looks the number up in Contacts, and hands the result to
 // the backend's `apply-call-info`, which stores it beside the note and adds the
-// caller to Participants. Nothing about voices, and nothing leaves the Mac.
+// caller to Participants. Nothing about voices. iMCP and the lookups stay on
+// this Mac; the caller then goes into the summary prompts, and so to a cloud
+// provider if the user has chosen one (src/call_info.py).
 //
 // Timing, measured on macOS 26: the call record exists within a second of the
-// call ending, so a lookup after the end is retried briefly. A call answered on
-// this Mac also has a record while it runs, so a recording stopped mid-call is
-// tried once at once; any other call has to end first.
+// call ending, so a lookup after the end first waits two seconds, then is
+// retried briefly: at once, a call placed on the iPhone may not be there yet,
+// and back to back the call before it would be. A call answered on this Mac
+// also has a record while it runs, so a recording stopped mid-call is tried
+// once at once; any other call has to end first.
 //
 // Delivery never races the note's own processing: while a job for the note is
 // queued or running, the call is only stored (the backend reads it before it
@@ -24,6 +28,7 @@ const { matchCall } = require('./call-matching');
 const CALL_AUDIO_APPS = [/^com\.apple\.avconferenced/, /^com\.apple\.FaceTime/];
 const LOOKUP_ATTEMPTS = 15;
 const LOOKUP_INTERVAL_MS = 1000;
+const RECORD_DELAY_MS = 2000;
 const RECENT_CALLS = 10;
 const KEEP_MS = 24 * 60 * 60 * 1000;
 
@@ -41,9 +46,10 @@ class CallerId {
     sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     lookupAttempts = LOOKUP_ATTEMPTS,
     lookupIntervalMs = LOOKUP_INTERVAL_MS,
+    recordDelayMs = RECORD_DELAY_MS,
   }) {
     Object.assign(this, { imcp, applyCallInfo, isProcessing, log, now, sleep,
-      lookupAttempts, lookupIntervalMs });
+      lookupAttempts, lookupIntervalMs, recordDelayMs });
     this.enabled = false;
     this._sessions = [];    // call audio on this Mac: { key, startedAt, endedAt }
     this._recordings = [];  // { stem, startedAt, stoppedAt, calls, tried, finalApply }
@@ -130,6 +136,7 @@ class CallerId {
     const attempts = once ? 1 : this.lookupAttempts;
     for (let i = 0; i < attempts; i += 1) {
       if (i > 0) await this.sleep(this.lookupIntervalMs);
+      else if (audio.endedAt) await this.sleep(this.recordDelayMs);
       if (!this.enabled) return;
       if (this.imcp.status.state !== 'ready') continue;
       try {

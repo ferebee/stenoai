@@ -14,7 +14,8 @@ function entry({ id = '1', number = '+12025550100', type = 'incoming', start = 0
     durationSeconds: duration, serviceProvider: 'com.apple.Telephony' };
 }
 
-function setup({ history = [], contacts = { '+12025550100': 'Erika Mustermann' }, busy = () => false } = {}) {
+function setup({ history = [], contacts = { '+12025550100': 'Erika Mustermann' }, busy = () => false,
+  sleep = async () => {}, apply = async () => {} } = {}) {
   const imcp = {
     status: { state: 'ready', contacts: true },
     started: 0,
@@ -32,8 +33,11 @@ function setup({ history = [], contacts = { '+12025550100': 'Erika Mustermann' }
   const callerId = new CallerId({
     imcp,
     isProcessing: busy,
-    applyCallInfo: async (stem, calls, options) => { applied.push({ stem, calls, ...options }); },
-    sleep: async () => {},
+    applyCallInfo: async (stem, calls, options) => {
+      applied.push({ stem, calls, ...options });
+      await apply(stem, calls);
+    },
+    sleep,
     now: () => ms(300), // a clock that matches the fake call times
     lookupAttempts: 5,
   });
@@ -91,6 +95,50 @@ test('the record appearing a moment after the call ends is waited for', async ()
   await callerId.idle();
   assert.strictEqual(applied.length, 1);
   assert.strictEqual(imcp.lookups, 3);
+});
+
+// A clock that only the lookup's own waiting moves, for history that changes
+// over time: `history(seconds)` is what iMCP has that long after the audio stop.
+function waitingClock(history) {
+  let waited = 0;
+  return {
+    sleep: async (msToWait) => { waited += msToWait; },
+    history: () => history(waited / 1000),
+  };
+}
+
+test('back to back: the call before does not stand in for the next one', async () => {
+  // Call A 10:00 to 10:10, stored as about 20 minutes. Call B placed on the
+  // iPhone and moved to the Mac, audio 10:12 to 10:15; its record is written a
+  // second after it ends. Times from 10:00.
+  const a = entry({ id: '1', number: '+12025550101', start: 0, duration: 1205 });
+  const b = entry({ id: '2', number: '+12025550102', type: 'outgoing', start: 680, duration: 440 });
+  const clock = waitingClock((s) => (s < 1 ? [a] : [b, a]));
+  const { callerId, applied } = setup({ history: clock.history, sleep: clock.sleep });
+  callerId.micEvent(mic('start', 0.4));
+  callerId.micEvent(mic('stop', 600));
+  callerId.micEvent(mic('start', 720));
+  callerId.recordingStarted('note-b', ms(721));
+  callerId.micEvent(mic('stop', 900));
+  callerId.recordingStopped(ms(901));
+  await callerId.idle();
+  assert.deepStrictEqual(applied.map((x) => x.calls.map((c) => c.number)), [['+12025550102']]);
+});
+
+test('redialled at once, the next call is waited for before looking', async () => {
+  // A ended at 10:10:00 and B's audio began five seconds later, too soon for
+  // the call history alone to tell them apart: only waiting for B's record does.
+  const a = entry({ id: '1', number: '+12025550101', start: 0, duration: 1205 });
+  const b = entry({ id: '2', number: '+12025550102', type: 'outgoing', start: 603, duration: 360 });
+  const clock = waitingClock((s) => (s < 1 ? [a] : [b, a]));
+  const { callerId, applied, imcp } = setup({ history: clock.history, sleep: clock.sleep });
+  callerId.micEvent(mic('start', 605));
+  callerId.recordingStarted('note-b', ms(606));
+  callerId.micEvent(mic('stop', 783));
+  callerId.recordingStopped(ms(784));
+  await callerId.idle();
+  assert.strictEqual(imcp.lookups, 1);
+  assert.strictEqual(applied[0].calls[0].number, '+12025550102');
 });
 
 test('a recording without call audio is never looked up', async () => {
