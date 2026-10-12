@@ -105,5 +105,6 @@
   "settings.general.callerId.status.needsMeetingDetection": "Turn on Auto-detected meetings: it is how Steno notices a call.",
   "settings.general.callerId.getImcp": "Get iMCP",
   "settings.general.callerId.homebrewHint": "Or with Homebrew: {{command}}",
-  "settings.general.callerId.loadError": "Could not load the caller setting. Try again."
+  "settings.general.callerId.loadError": "Could not load the caller setting. Try again.",
+  "settings.general.callerId.saveError": "Could not change the caller setting. Try again."
 }

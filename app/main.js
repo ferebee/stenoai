@@ -9328,6 +9328,8 @@ function callerIdSettings() {
 ipcMain.handle('get-caller-id', () => callerIdSettings());
 
 ipcMain.handle('set-caller-id', async (_event, enabled) => {
+  // The setting means nothing off macOS, so it is not saved there either.
+  if (process.platform !== 'darwin') return { success: false, error: 'Caller recognition is macOS only' };
   try {
     const result = await runPythonScript('simple_recorder.py', ['set-caller-id', enabled ? 'True' : 'False'], true);
     const saved = JSON.parse(result.match(/\{.*\}/s)?.[0] || '{}');

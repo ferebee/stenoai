@@ -3,6 +3,7 @@ import { Switch } from '@/components/ui/switch';
 import { useCallerIdSetting, useSetCallerId } from '@/hooks/useSettings';
 import { t } from '@/i18n';
 import { ipc, type GetCallerIdResponse } from '@/lib/ipc';
+import { isMac } from '@/lib/utils';
 import { COMPACT_BTN, SettingRow } from './primitives';
 
 type CallerIdSettings = Extract<GetCallerIdResponse, { success: true }>;
@@ -58,9 +59,14 @@ function statusText(data: CallerIdSettings): string | null {
 
 /**
  * "Identify phone callers": names the caller on notes of phone and FaceTime
- * calls through iMCP (app/caller-id.js). macOS only; renders nothing elsewhere.
+ * calls through iMCP (app/caller-id.js). macOS only; renders nothing elsewhere,
+ * not even while main's answer is on its way.
  */
 export function CallerIdRow() {
+  return isMac ? <CallerIdSetting /> : null;
+}
+
+function CallerIdSetting() {
   const setting = useCallerIdSetting();
   const setCallerId = useSetCallerId();
   const data = setting.data;
@@ -97,6 +103,11 @@ export function CallerIdRow() {
           )}
           {setting.isError && (
             <span className="mt-1 block">{t('settings.general.callerId.loadError')}</span>
+          )}
+          {setCallerId.isError && (
+            <span className="mt-1 block" role="alert">
+              {t('settings.general.callerId.saveError')}
+            </span>
           )}
         </>
       }
