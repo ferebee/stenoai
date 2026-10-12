@@ -364,7 +364,14 @@ export function useRecordingEvents() {
         void startRecording(sessionName ?? undefined, unattended ? 'auto_record' : 'notification_click');
         // "Take Notes" is an explicit intent to write notes, so open the
         // live-note editor (main already brought the window forward). Mirrors
-        // the toolbar New-note button.
+        // the toolbar New-note button. An unattended start does not: it would
+        // take over whatever the user has open in Steno, or put up the note
+        // editor's unsaved-changes prompt, because a call began. Its toast
+        // opens the live note instead (openLiveNote below).
+        if (!unattended) navigate('/recording');
+      }),
+      bridge.on.openLiveNote(() => {
+        // The "Recording started" toast was tapped (auto-record).
         navigate('/recording');
       }),
       bridge.on.autoPauseRequested(() => {

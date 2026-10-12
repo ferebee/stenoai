@@ -473,6 +473,7 @@ const stenoai = {
     trayStartRecording: (cb) => subscribe('tray-start-recording', cb),
     trayStopRecording: (cb) => subscribe('tray-stop-recording', cb),
     autoRecordRequested: (cb) => subscribe('auto-record-requested', cb),
+    openLiveNote: (cb) => subscribe('open-live-note', cb),
     autoPauseRequested: (cb) => subscribe('auto-pause-requested', cb),
     autoResumeRequested: (cb) => subscribe('auto-resume-requested', cb),
     autoSummariseRequested: (cb) => subscribe('auto-summarise-requested', cb),

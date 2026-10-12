@@ -1520,6 +1520,7 @@ export interface StenoaiBridge {
     trayStartRecording: Subscribe<void>;
     trayStopRecording: Subscribe<void>;
     autoRecordRequested: Subscribe<{ sessionName?: string; appName?: string; unattended?: boolean }>;
+    openLiveNote: Subscribe<void>;
     autoPauseRequested: Subscribe<void>;
     autoResumeRequested: Subscribe<void>;
     autoSummariseRequested: Subscribe<void>;

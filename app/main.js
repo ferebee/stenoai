@@ -159,6 +159,10 @@ const { autoUpdater } = require('electron-updater');
 //                           STENOAI_E2E_SPEAKER_UPGRADE=1 opts a spec into it
 //   STENOAI_E2E_MOCK_IPC=1 — install deterministic mock IPC handlers
 //   STENOAI_E2E_HEADLESS=1 - keep the main window rendered but never visible/focused
+//   STENOAI_E2E_MIC_EVENTS=1 - expose globalThis.__stenoE2EMicEvent(evt), which
+//                           feeds one mic-monitor line to handleMicEvent, so a
+//                           spec can play a detected meeting (unpackaged only;
+//                           see ALLOW_E2E_PATH_SEAMS for why)
 if (process.env.STENOAI_USER_DATA_DIR) {
   app.setPath('userData', process.env.STENOAI_USER_DATA_DIR);
 }
@@ -7766,6 +7770,13 @@ async function handleMicEvent(line) {
   showMeetingDetectedNotification(appName, evt, calEvent);
 }
 
+// E2E: a spec plays a meeting detection by handing in the JSON object
+// mic-monitor would print (auto-record.t2). Gated like the path seams: it can
+// start a recording, so a packaged build never has it.
+if (ALLOW_E2E_PATH_SEAMS && process.env.STENOAI_E2E_MIC_EVENTS === '1') {
+  globalThis.__stenoE2EMicEvent = (evt) => handleMicEvent(JSON.stringify(evt));
+}
+
 function handleMicStop(evt) {
   if (!autoStartedSession) return;
   // Recording may have been stopped manually (Stop button, hotkey, shortcut)
@@ -7888,7 +7899,11 @@ function requestAutoRecord(appName, originatingEvt, calEvent, { focus = true } =
 function showAutoRecordStartedNotification({ id, ...details }) {
   const notif = new Notification(buildAutoRecordStartedOptions(details));
   notif.on('click', () => {
-    if (mainWindow && !mainWindow.isDestroyed()) exposeMainWindow();
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    exposeMainWindow();
+    // The unattended start left the user's view alone; the tap is the request
+    // to see the live note. Only while that recording is still running.
+    if (autoStarts.isCurrent(id)) mainWindow.webContents.send('open-live-note');
   });
   notif.on('action', () => {
     if (!autoStarts.isCurrent(id)) {
