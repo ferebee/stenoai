@@ -5026,7 +5026,10 @@ ipcMain.handle('delete-meeting', async (event, meetingData) => {
     //     disk, with no UI that ever shows it - a privacy regression against the
     //     local-first promise, not just untidiness. Same "unlinked only at
     //     commit" semantics as the rest: an undo must restore a COMPLETE note.
-    for (const sidecarSuffix of ['_reports.json', '_original.json']) {
+    //   _call.json     - the phone or FaceTime call the recording captured
+    //     (src/call_info.py): the caller's name and number. Left behind, a
+    //     deleted call would still say whom it was with.
+    for (const sidecarSuffix of ['_reports.json', '_original.json', '_call.json']) {
       let sidecarBase = null;
       for (const suf of ['_summary.md', '_summary.json']) {
         if (summaryBase.endsWith(suf)) {
