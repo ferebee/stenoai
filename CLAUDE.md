@@ -106,7 +106,9 @@ call with `app/call-matching.js`, looks the number up, and runs
 (`src/call_info.py`) and adds the caller to Participants;
 `_update_summary_participants` keeps callers through every speaker-side
 rewrite, and `OllamaSummarizer.meeting_context` tells the prompts who the call
-was with. It needs Auto-detected meetings on, since the mic monitor is what
+was with, by name only: the note and the prompts reach the models, so a caller
+without a name adds nothing there, and the number stays in the sidecar. It needs
+Auto-detected meetings on, since the mic monitor is what
 notices a call, so under E2E only the setting and status are exercised
 (`STENOAI_IMCP_SERVER` points at the mock bridge).
 

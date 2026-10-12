@@ -13,14 +13,20 @@ Electron app finds the call in the Mac's call history through iMCP
 ``name`` is the Contacts name and may be null; ``number`` may be null for a
 withheld number. A continued note gets the calls of each recording that went
 into it: ``apply-call-info`` adds to the stored calls (``merge_calls``), and
-nothing else writes the file. It is the source of truth, and two things are
-derived from it:
+nothing else writes the file. It is the source of truth, and what is derived
+from it uses names only, because a note's text reaches the models: the
+summary, report and title prompts, and chat over notes, which may be a cloud
+provider's (the Settings row asks the user to acknowledge this). A caller with
+no name is left to the speaker side, as if caller recognition were off.
 
-- Participants: every caller is listed, by name or else by number, and
+- Participants: every named caller is listed, and
   ``_update_summary_participants`` adds them back whenever the speaker side
   rewrites the section, so reprocessing or confirming speakers cannot lose them.
-- Prompt context: the summary, report and title prompts are told who the call
+- Prompt context: the summary, report and title prompts are told whom the call
   was with (``OllamaSummarizer.meeting_context``).
+
+The number stays in this file, on the Mac. The Obsidian export reads it from
+here into the note's front matter (``call_numbers``, app/obsidian-sync.js).
 
 No voice data, no speaker confirmation, no analytics: the caller is a fact
 about the recording, not about anyone's voice.
@@ -118,13 +124,14 @@ def merge_calls(stored: list, new: list) -> list:
 
 
 def caller_label(call: dict) -> Optional[str]:
-    """How a caller appears in Participants: the Contacts name, else the number."""
-    return call.get("name") or call.get("number")
+    """How a caller appears in Participants: the Contacts name, or None. Never
+    the number, which would reach the models with the note's text."""
+    return call.get("name") or None
 
 
 def with_callers(calls: list, participant_names: list) -> list:
-    """``participant_names`` with the callers first, in the order of the calls,
-    each once and as already spelled there if it is."""
+    """``participant_names`` with the named callers first, in the order of the
+    calls, each once and as already spelled there if it is."""
     names = list(participant_names or [])
     spelled = {}
     for name in names:
@@ -139,21 +146,19 @@ def with_callers(calls: list, participant_names: list) -> list:
 
 
 def meeting_context(calls: list) -> str:
-    """The prompt preamble naming the other party, or "" when there was no call."""
-    if not calls:
+    """The prompt preamble naming the other party, or "" when no call has a
+    name. A call without one adds nothing: the prompts then read as they would
+    with caller recognition off, and the number never reaches a model."""
+    named = [call for call in calls if call.get("name")]
+    if not named:
         return ""
     sentences = []
-    for call in calls:
+    for call in named:
         kind = _SERVICES.get(call.get("service"), "call")
         if call.get("direction"):
             kind = f"{call['direction']} {kind}"
         article = "an" if kind[0] in "aeiou" else "a"
-        if call.get("name"):
-            who = call["name"] + (f" ({call['number']})" if call.get("number") else "")
-        else:
-            who = f"{call['number']}, a number not in the user's contacts"
-        sentences.append(f"This recording is {article} {kind} with {who}.")
+        sentences.append(f"This recording is {article} {kind} with {call['name']}.")
     sentences.append("[Others] in the transcript is the other party on the call.")
-    if any(call.get("name") for call in calls):
-        sentences.append("Refer to them by name.")
+    sentences.append("Refer to them by name.")
     return "CALL: " + " ".join(sentences) + "\n\n"

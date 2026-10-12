@@ -2990,7 +2990,7 @@
     },
     "renderer/src/routes/settings/CallerIdRow.tsx": {
       "copy": [
-        "Add the caller to notes of phone and FaceTime calls, by Contacts name or by number. Requires the free {{…}} to read this Mac's call history and Contacts; nothing leaves your Mac.",
+        "Add the caller to notes of phone and FaceTime calls, by Contacts name or by number. Requires the free {{…}} to read this Mac's call history and Contacts. With a cloud provider, the caller's name, or the number if there is no name, is sent along with the transcript.",
         "Allow Steno in the iMCP window.",
         "Could not change the caller setting. Try again.",
         "Could not load the caller setting. Try again.",

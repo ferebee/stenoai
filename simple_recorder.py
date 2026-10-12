@@ -8177,11 +8177,11 @@ def _set_call_context(summarizer, output_dir, meeting_stem: str) -> None:
 
 
 def _add_callers_to_participants(output_dir, meeting_stem: str) -> bool:
-    """Put the recording's callers (src.call_info) into Participants, keeping
-    whoever is listed already. A no-op when the recording captured no call.
+    """Put the recording's named callers (src.call_info) into Participants,
+    keeping whoever is listed already. A no-op when no call has a name.
     Returns whether the note is now current, as _update_summary_participants."""
     from src.call_info import read_calls
-    if not read_calls(output_dir, meeting_stem):
+    if not any(call.get("name") for call in read_calls(output_dir, meeting_stem)):
         return True
     output_dir = Path(output_dir)
     json_path = output_dir / f"{meeting_stem}_summary.json"

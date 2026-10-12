@@ -8,8 +8,9 @@
 // (call-matching.js), looks the number up in Contacts, and hands the result to
 // the backend's `apply-call-info`, which stores it beside the note and adds the
 // caller to Participants. Nothing about voices. iMCP and the lookups stay on
-// this Mac; the caller then goes into the summary prompts, and so to a cloud
-// provider if the user has chosen one (src/call_info.py).
+// this Mac. The caller's name goes into the note and its prompts, and so to a
+// cloud provider if the user has chosen one; the number stays beside the note
+// (src/call_info.py).
 //
 // Timing, measured on macOS 26: the call record exists within a second of the
 // call ending, so a lookup after the end first waits two seconds, then is

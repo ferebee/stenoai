@@ -22,6 +22,8 @@ ERIKA = {"name": "Erika Mustermann", "number": "+12025550100", "direction": "inc
          "service": "phone", "started_at": "2026-03-02T14:00:00Z"}
 UNKNOWN = {"name": None, "number": "+12025550101", "direction": "outgoing",
            "service": "facetime", "started_at": "2026-03-02T15:00:00Z"}
+MAX = {"name": "Max Mustermann", "number": "+12025550102", "direction": "outgoing",
+       "service": "phone", "started_at": "2026-03-02T16:00:00Z"}
 
 NOTE = """---
 title: "Note"
@@ -74,14 +76,19 @@ class CallInfoTests(unittest.TestCase):
             write_calls(tmp, "stem", [ERIKA])
             self.assertEqual(read_calls(tmp, "stem"), [ERIKA])
 
-    def test_with_callers_adds_each_caller_once_by_name_else_number(self):
-        self.assertEqual(with_callers([ERIKA, UNKNOWN], ["Max Mustermann"]),
-                         ["Erika Mustermann", "+12025550101", "Max Mustermann"])
+    def test_with_callers_adds_each_named_caller_once(self):
+        self.assertEqual(with_callers([ERIKA], ["Speaker 2"]), ["Erika Mustermann", "Speaker 2"])
         self.assertEqual(with_callers([ERIKA], ["erika mustermann"]), ["erika mustermann"])
-        self.assertEqual(with_callers([], ["Max Mustermann"]), ["Max Mustermann"])
+        self.assertEqual(with_callers([], ["Speaker 2"]), ["Speaker 2"])
         # Callers lead in the order of the calls, wherever they were listed.
-        self.assertEqual(with_callers([ERIKA, UNKNOWN], ["+12025550101", "Erika Mustermann"]),
-                         ["Erika Mustermann", "+12025550101"])
+        self.assertEqual(with_callers([ERIKA, MAX], ["Max Mustermann", "Erika Mustermann"]),
+                         ["Erika Mustermann", "Max Mustermann"])
+
+    def test_with_callers_never_lists_a_number(self):
+        # Participants reach the models (prompts, chat over notes): a caller
+        # without a name is left out, as if caller recognition were off.
+        self.assertEqual(with_callers([UNKNOWN], ["Speaker 2"]), ["Speaker 2"])
+        self.assertEqual(with_callers([ERIKA, UNKNOWN], []), ["Erika Mustermann"])
 
     def test_merge_calls_adds_new_calls_and_updates_known_ones(self):
         self.assertEqual(merge_calls([ERIKA], [UNKNOWN]), [ERIKA, UNKNOWN])
@@ -95,16 +102,20 @@ class CallInfoTests(unittest.TestCase):
     def test_meeting_context_names_the_other_party(self):
         text = meeting_context([ERIKA])
         self.assertTrue(text.startswith("CALL: This recording is an incoming phone call "
-                                        "with Erika Mustermann (+12025550100)."))
+                                        "with Erika Mustermann."))
+        # A name is enough: the number stays out of the prompts.
+        self.assertNotIn("+12025550100", text)
         self.assertIn("[Others] in the transcript is the other party", text)
         self.assertIn("Refer to them by name.", text)
         self.assertTrue(text.endswith("\n\n"))
 
-    def test_meeting_context_for_a_number_not_in_contacts(self):
-        text = meeting_context([UNKNOWN])
-        self.assertIn("an outgoing FaceTime call with +12025550101, a number not in "
-                      "the user's contacts.", text)
-        self.assertNotIn("by name", text)
+    def test_meeting_context_leaves_out_a_call_without_a_name(self):
+        # No name: the prompts read as with caller recognition off.
+        self.assertEqual(meeting_context([UNKNOWN]), "")
+        text = meeting_context([ERIKA, UNKNOWN])
+        self.assertIn("with Erika Mustermann.", text)
+        self.assertNotIn("FaceTime", text)
+        self.assertNotIn("+12025550101", text)
 
     def test_meeting_context_is_empty_without_a_call(self):
         self.assertEqual(meeting_context([]), "")
@@ -224,19 +235,27 @@ class ApplyCallInfoCliTests(unittest.TestCase):
 
     def test_a_continued_note_keeps_the_earlier_caller(self):
         # The first recording was a call with Erika; the continuation, recorded
-        # into the same note, a call with another number.
+        # into the same note, a call with Max.
         with tempfile.TemporaryDirectory() as tmp:
             md = self._with_note(tmp)
             self._run(["stem", "--calls", json.dumps([ERIKA])], tmp)
-            result, output_dir = self._run(["stem", "--calls", json.dumps([UNKNOWN])], tmp)
+            result, output_dir = self._run(["stem", "--calls", json.dumps([MAX])], tmp)
             self.assertEqual(_last_json(result.output),
                              {"success": True, "calls": 2, "note_updated": True})
-            self.assertEqual(read_calls(output_dir, "stem"), [ERIKA, UNKNOWN])
-            self.assertEqual(_participants(md), ["Erika Mustermann", "+12025550101"])
+            self.assertEqual(read_calls(output_dir, "stem"), [ERIKA, MAX])
+            self.assertEqual(_participants(md), ["Erika Mustermann", "Max Mustermann"])
             # And the next speaker rewrite keeps both.
-            simple_recorder._update_summary_participants(output_dir, "stem", ["Max Mustermann"])
+            simple_recorder._update_summary_participants(output_dir, "stem", ["Speaker 2"])
             self.assertEqual(_participants(md),
-                             ["Erika Mustermann", "+12025550101", "Max Mustermann"])
+                             ["Erika Mustermann", "Max Mustermann", "Speaker 2"])
+
+    def test_a_caller_without_a_name_is_stored_but_not_listed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            md = self._with_note(tmp)
+            result, output_dir = self._run(["stem", "--calls", json.dumps([UNKNOWN])], tmp)
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertEqual(read_calls(output_dir, "stem"), [UNKNOWN])
+            self.assertEqual(md.read_text(encoding="utf-8"), NOTE)
 
     def test_sidecar_only_leaves_the_note_alone(self):
         with tempfile.TemporaryDirectory() as tmp:

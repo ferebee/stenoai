@@ -93,7 +93,7 @@
   "noteShare.transcript": "Share transcript…",
   "noteShare.saveNotesMarkdown": "Save notes as .md…",
   "settings.general.callerId.label": "Identify phone callers",
-  "settings.general.callerId.description": "Add the caller to notes of phone and FaceTime calls, by Contacts name or by number. Requires the free {{app}} to read this Mac's call history and Contacts; nothing leaves your Mac.",
+  "settings.general.callerId.description": "Add the caller to notes of phone and FaceTime calls, by Contacts name or by number. Requires the free {{app}} to read this Mac's call history and Contacts. With a cloud provider, the caller's name, or the number if there is no name, is sent along with the transcript.",
   "settings.general.callerId.imcpLink": "iMCP.app",
   "settings.general.callerId.status.notInstalled": "Install iMCP to use this.",
   "settings.general.callerId.status.notRunning": "Open iMCP to continue.",
