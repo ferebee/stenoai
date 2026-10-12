@@ -381,7 +381,10 @@ export function GeneralTab() {
         />
       </SettingRow>
 
-      <AutoRecordRow detectionOn={autoDetectSupported && autoDetect.data === true} />
+      <AutoRecordRow
+        detectionSupported={autoDetectSupported}
+        detectionOn={autoDetectSupported && autoDetect.data === true}
+      />
 
       <SettingRow
         label="Post meeting notifications"

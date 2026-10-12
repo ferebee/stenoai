@@ -370,7 +370,7 @@ export type MicPermissionGrantResponse = Result<{ granted: boolean }>;
 /** Mirrors RECORDING_TRIGGERS in main.js -- what UI action started the
  *  recording, so PostHog can tell whether the meeting-detected nudge
  *  actually moves the needle. */
-export type RecordingTrigger = 'manual' | 'notification_click' | 'hotkey' | 'tray' | 'url_scheme';
+export type RecordingTrigger = 'manual' | 'notification_click' | 'auto_record' | 'hotkey' | 'tray' | 'url_scheme';
 
 /** Mirrors TELEMETRY_TOGGLE_SOURCES in main.js -- which UI surface the
  *  telemetry toggle was flipped from. 'setup' names the Setup.tsx screen,
@@ -1519,7 +1519,7 @@ export interface StenoaiBridge {
     shortcutStopRecording: Subscribe<void>;
     trayStartRecording: Subscribe<void>;
     trayStopRecording: Subscribe<void>;
-    autoRecordRequested: Subscribe<{ sessionName?: string; appName?: string }>;
+    autoRecordRequested: Subscribe<{ sessionName?: string; appName?: string; unattended?: boolean }>;
     autoPauseRequested: Subscribe<void>;
     autoResumeRequested: Subscribe<void>;
     autoSummariseRequested: Subscribe<void>;

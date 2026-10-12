@@ -5,14 +5,14 @@
 //
 // Pure helpers, kept out of main.js so they are unit-testable without
 // Electron. main.js owns the wiring: handleMicEvent decides, requestAutoRecord
-// starts, and the system-audio-recording-state handler announces.
+// starts, and createAutoStarts below ties each toast to its own recording.
 
 const fs = require('fs');
 
-// How long an unattended start may take to report that capture is running
-// before its announcement is dropped. Capture normally reports within a second
-// or two; a start that fails (no microphone, permission revoked) never does,
-// and a later manual recording must not inherit its "Recording started" toast.
+// How long an unattended start may stay pending before it is dropped. The
+// renderer starts the recording within a second or two; a start that never
+// reaches main (the renderer was mid-stop, say) must not hold back the next
+// detection for longer than this.
 const ANNOUNCE_WINDOW_MS = 30_000;
 
 /**
@@ -48,24 +48,58 @@ function buildAutoRecordStartedOptions({ appName, calendarTitle } = {}) {
 }
 
 /**
- * Remembers an unattended start until capture confirms it, so the toast says
- * "Recording started" only for a recording that did. `expect` when the start
- * is requested; `take` when capture reports it is recording, which returns the
- * start's details once, or null if there was none or it is older than the
- * window.
+ * Tracks unattended starts so each "Recording started" toast belongs to exactly
+ * one recording (#579 review):
+ *
+ *   begin(details)        an auto-start is requested; returns its id, or null
+ *                         while another is still pending (a second detection
+ *                         before capture starts must not replace the first)
+ *   recordingStarted(t)   main accepted a start; the trigger says whose. Only
+ *                         'auto_record' binds the pending start to this
+ *                         recording; any other start drops it, so a recording
+ *                         the user started never inherits the meeting's toast
+ *   startFailed()         the renderer reported a failed start: drop it
+ *   captureConfirmed()    capture is running; returns the bound start's
+ *                         details and id once, else null
+ *   isCurrent(id)         is that start's recording still the one running?
+ *                         The toast's Stop acts only then
+ *   recordingStopped()    the recording ended
+ *
+ * A pending start that never reaches main expires after the window, so it
+ * cannot block later detections for long.
  */
-function createStartAnnouncer({ now = Date.now, windowMs = ANNOUNCE_WINDOW_MS } = {}) {
-  let pending = null;
+function createAutoStarts({ now = Date.now, windowMs = ANNOUNCE_WINDOW_MS } = {}) {
+  let nextId = 1;
+  let pending = null; // { id, details, at }
+  let bound = null; // { id, details, announced }
+  const isPending = () => Boolean(pending) && now() - pending.at <= windowMs;
   return {
-    expect(details) {
-      pending = { ...details, at: now() };
+    isPending,
+    begin(details) {
+      if (isPending()) return null;
+      pending = { id: nextId++, details, at: now() };
+      return pending.id;
     },
-    take() {
-      const p = pending;
+    recordingStarted(trigger) {
+      bound = trigger === 'auto_record' && isPending()
+        ? { id: pending.id, details: pending.details, announced: false }
+        : null;
       pending = null;
-      if (!p || now() - p.at > windowMs) return null;
-      const { at: _at, ...details } = p;
-      return details;
+    },
+    startFailed() {
+      pending = null;
+      bound = null;
+    },
+    captureConfirmed() {
+      if (!bound || bound.announced) return null;
+      bound.announced = true;
+      return { id: bound.id, ...bound.details };
+    },
+    isCurrent(id) {
+      return Boolean(bound) && bound.id === id;
+    },
+    recordingStopped() {
+      bound = null;
     },
   };
 }
@@ -74,5 +108,5 @@ module.exports = {
   ANNOUNCE_WINDOW_MS,
   loadAutoRecordMeetingsEnabled,
   buildAutoRecordStartedOptions,
-  createStartAnnouncer,
+  createAutoStarts,
 };
