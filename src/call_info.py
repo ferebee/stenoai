@@ -25,8 +25,8 @@ no name is left to the speaker side, as if caller recognition were off.
 - Prompt context: the summary, report and title prompts are told whom the call
   was with (``OllamaSummarizer.meeting_context``).
 
-The number stays in this file, on the Mac: nothing else reads it, and the
-Obsidian export leaves it out, since a vault may sync elsewhere or be read by
+The number stays in this file, on the Mac; it is not added to note text, prompts, chat
+context, or Obsidian export, since a vault may sync elsewhere or be read by
 other tools. ``tests/test_call_info.py`` checks that no prompt or chat context
 carries it.
 
