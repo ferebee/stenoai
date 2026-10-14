@@ -165,25 +165,10 @@ function deriveFilename(dateStr, title, stem, isTaken) {
   return name;
 }
 
-// The numbers of the phone or FaceTime calls a note captured, from the
-// `<stem>_call.json` beside it (src/call_info.py, macOS caller recognition).
-// The note itself names callers only, since its text reaches the AI models;
-// the vault copy also carries the numbers, as a property. [] when none.
-function loadCallNumbers(summaryPath) {
-  try {
-    const sidecar = summaryPath.slice(0, -SUMMARY_SUFFIX.length) + '_call.json';
-    if (!fs.existsSync(sidecar)) return [];
-    const data = JSON.parse(fs.readFileSync(sidecar, 'utf8'));
-    const calls = Array.isArray(data && data.calls) ? data.calls : [];
-    const numbers = calls.map((c) => (c && typeof c.number === 'string' ? c.number.trim() : ''));
-    return [...new Set(numbers.filter(Boolean))];
-  } catch (_) { return []; }
-}
-
 // Build the vault-side note from a raw `<stem>_summary.md`. `resolveFolderName`
-// maps a folder id -> name (or null); `callNumbers` are the note's callers'
-// numbers (loadCallNumbers). Returns { vaultBody, title, dateStr, folderName }.
-function transformNote(raw, { stem, resolveFolderName, callNumbers = [] }) {
+// maps a folder id -> name (or null). Returns { vaultBody, title, dateStr,
+// folderName }.
+function transformNote(raw, { stem, resolveFolderName }) {
   const { fm, body } = parseFrontmatter(raw);
   const title = fm.title || stem;
   // Only a well-formed YYYY-MM-DD becomes part of the filename — a hand-edited
@@ -207,10 +192,7 @@ function transformNote(raw, { stem, resolveFolderName, callNumbers = [] }) {
   const partBlock = participants.length
     ? 'participants:\n' + participants.map((p) => `  - ${yamlQuote(p)}`).join('\n')
     : null;
-  const callBlock = callNumbers.length
-    ? 'call_numbers:\n' + callNumbers.map((n) => `  - ${yamlQuote(n)}`).join('\n')
-    : null;
-  const fmOut = ['---', ...props, partBlock, callBlock, 'source: Steno',
+  const fmOut = ['---', ...props, partBlock, 'source: Steno',
     `steno_stem: ${yamlQuote(stem)}`, '---'].filter(Boolean).join('\n');
 
   const vaultBody = fmOut + '\n\n' + stripSection(body, 'Transcript');
@@ -323,8 +305,8 @@ function registerObsidianSync({
       try { raw = fs.readFileSync(summaryPath, 'utf8'); }
       catch (_) { return { status: 'skipped' }; } // note gone → nothing to mirror
       const stem = stemFromSummaryPath(summaryPath);
-      const { vaultBody, dateStr, title, folderName } = transformNote(raw,
-        { stem, resolveFolderName, callNumbers: loadCallNumbers(summaryPath) });
+      const { vaultBody, dateStr, title, folderName } =
+        transformNote(raw, { stem, resolveFolderName });
       const sub = folderName ? sanitizeFilename(folderName, folderName) : '';
       const entry = idx.notes[stem];
       const takenBy = (name) => {

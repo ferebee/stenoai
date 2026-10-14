@@ -290,6 +290,52 @@ class ApplyCallInfoCliTests(unittest.TestCase):
             self.assertFalse(any(Path(tmp).rglob("*_call.json")))
 
 
+class NumbersNeverReachTheModelsTests(unittest.TestCase):
+    """A caller's number stays in <stem>_call.json: it is in no note text, no
+    prompt and no chat context, named callers and unnamed ones alike."""
+
+    NUMBERS = ("+12025550100", "+12025550101", "+12025550102")
+
+    def _assert_no_number(self, text, where):
+        for number in self.NUMBERS:
+            self.assertNotIn(number, text, where)
+            self.assertNotIn(number.lstrip("+"), text, where)
+
+    def test_note_prompts_and_chat_carry_no_number(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            from src.config import get_data_dirs
+            cfg = Config(config_path=Path(tmp) / "config.json")
+            with mock.patch("src.config.get_config", return_value=cfg), \
+                 mock.patch.dict("os.environ", {"STENOAI_USER_DATA_DIR": tmp}):
+                output_dir = Path(get_data_dirs()["output"])
+                md = output_dir / "stem_summary.md"
+                md.write_text(NOTE, encoding="utf-8")
+                result = CliRunner().invoke(
+                    simple_recorder.apply_call_info,
+                    ["stem", "--calls", json.dumps([ERIKA, UNKNOWN, MAX])])
+                self.assertEqual(result.exit_code, 0, result.output)
+                # Stored, with every number.
+                self.assertEqual(len(read_calls(output_dir, "stem")), 3)
+                # The note: Participants by name only.
+                self._assert_no_number(md.read_text(encoding="utf-8"), "note")
+                self.assertEqual(_participants(md), ["Erika Mustermann", "Max Mustermann"])
+                # The prompts.
+                with mock.patch.object(OllamaSummarizer, "_ensure_ollama_ready"):
+                    s = OllamaSummarizer(model_name="m", ai_provider="local", config=cfg)
+                simple_recorder._set_call_context(s, output_dir, "stem")
+                self.assertIn("Erika Mustermann", s.meeting_context)
+                transcript = "[You] Hello.\n[Others] Hello."
+                for prompt in (s._create_markdown_prompt(transcript),
+                               s._create_template_report_prompt(transcript, "Write a report."),
+                               s._create_reduce_prompt(["one", "two"])):
+                    self._assert_no_number(prompt, "prompt")
+                # Single-note chat and chat across notes.
+                parts = simple_recorder._build_meeting_chat_context_parts(
+                    simple_recorder._parse_meeting_markdown(md))
+                self._assert_no_number("\n".join(parts), "note chat")
+                self._assert_no_number(simple_recorder._build_chat_corpus(), "global chat")
+
+
 class PromptContextTests(unittest.TestCase):
     """Every prompt the summarizer builds carries what the recorder knows about the call."""
 

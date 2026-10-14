@@ -108,11 +108,10 @@ caller to Participants; `_update_summary_participants` keeps callers through
 every speaker-side rewrite, and `OllamaSummarizer.meeting_context` tells the
 prompts who the call was with. Only names reach the note and the prompts, since
 both reach the models (chat over notes included); a caller without a name adds
-nothing there. The number stays in the sidecar, and the Obsidian export
-(`app/obsidian-sync.js`) lists it in the vault copy's front matter as
-`call_numbers`. It needs Auto-detected meetings on, since the mic monitor is
-what notices a call, so under E2E only the setting and status are exercised
-(`STENOAI_IMCP_SERVER` points at the mock bridge).
+nothing there. The number stays in the sidecar on this Mac: no prompt, chat or
+export reads it, the Obsidian copy included. It needs Auto-detected meetings
+on, since the mic monitor is what notices a call, so under E2E only the setting
+and status are exercised (`STENOAI_IMCP_SERVER` points at the mock bridge).
 
 ### End-to-end tests (Playwright)
 The e2e suite drives the **real Electron app** (real window, real clicks) to catch

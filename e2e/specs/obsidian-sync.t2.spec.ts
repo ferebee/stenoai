@@ -159,7 +159,7 @@ test('backfill writes a transcript-free note; rename moves it; external edits an
   expect(fileSig(realUserDataDir())).toBe(realDirBefore);
 });
 
-test("a call recording's numbers reach the vault copy's front matter, not the note", async ({
+test("a call recording's caller reaches the vault copy by name, its number nowhere", async ({
   launchApp,
   userDataDir,
 }) => {
@@ -167,8 +167,8 @@ test("a call recording's numbers reach the vault copy's front matter, not the no
   test.skip(!existsSync(BACKEND), 'backend bundle not built');
 
   // Caller recognition (src/call_info.py) names callers in the note and keeps
-  // their numbers in <stem>_call.json; the vault copy lists the numbers as
-  // call_numbers. Invented data.
+  // their numbers in <stem>_call.json only; the vault copy carries the name in
+  // participants and no number. Invented data.
   const outputDir = path.join(userDataDir, 'output');
   mkdirSync(outputDir, { recursive: true });
   const summaryPath = path.join(outputDir, 'callnote_summary.md');
@@ -197,6 +197,8 @@ test("a call recording's numbers reach the vault copy's front matter, not the no
     .poll(() => vaultFiles(vault).includes(targetName), { timeout: 20_000, intervals: [250] })
     .toBe(true);
   const written = readFileSync(path.join(vault, targetName), 'utf8');
-  expect(written).toMatch(/participants:\n {2}- "Erika Mustermann"\ncall_numbers:\n {2}- "\+12025550100"\n/);
+  expect(written).toMatch(/participants:\n {2}- "Erika Mustermann"\n/);
+  expect(written).not.toContain('+12025550100');
+  expect(written).not.toContain('call_numbers');
   expect(readFileSync(summaryPath, 'utf8')).not.toContain('+12025550100');
 });
