@@ -246,10 +246,24 @@ export function useCallerIdSetting() {
 
 export function useSetCallerId() {
   const qc = useQueryClient();
+  const queryKey = settingsKeys.callerId();
   return useMutation({
     mutationFn: async (v: boolean): Promise<CallerIdSettings> =>
       unwrap(await ipc().settings.setCallerId(v)),
-    onSuccess: (settings) => qc.setQueryData(settingsKeys.callerId(), settings),
+    // As useToggleSetting: the switch moves at once, and goes back if the save
+    // fails. The answer then replaces the guess, since it carries iMCP's status.
+    onMutate: async (v: boolean) => {
+      await qc.cancelQueries({ queryKey });
+      const previous = qc.getQueryData<CallerIdSettings>(queryKey);
+      if (previous) {
+        qc.setQueryData<CallerIdSettings>(queryKey, { ...previous, caller_id_enabled: v });
+      }
+      return { previous };
+    },
+    onError: (_err, _v, ctx) => {
+      if (ctx?.previous) qc.setQueryData(queryKey, ctx.previous);
+    },
+    onSuccess: (settings) => qc.setQueryData(queryKey, settings),
   });
 }
 
