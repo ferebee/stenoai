@@ -619,6 +619,7 @@
   "meeting.backingUp": "Backing up…",
   "meeting.notBackedUp": "Not backed up",
   "meeting.notesNotGenerated": "Notes weren’t generated",
+  "meeting.noteNotRetranscribed": "Note wasn’t transcribed again",
   "meeting.transcriptionFailed": "Transcription failed",
   "meeting.transcriptionFailedDetail": "No notes could be generated for this recording. Your audio was preserved (not deleted), so nothing was lost.",
   "meeting.errorDetails": "Details: {{error}}",
@@ -667,5 +668,9 @@
   "meeting.duration.minutes": "{{minutes}}m",
   "meeting.duration.seconds": "{{seconds}}s",
   "meeting.discussionTopicFallback": "Discussion topic",
-  "meeting.errorFallback": "Something went wrong."
+  "meeting.errorFallback": "Something went wrong.",
+  "report.properties.toggle": "Properties",
+  "report.properties.toggleLabel": "Properties, {{count}}",
+  "report.properties.yes": "yes",
+  "report.properties.no": "no"
 }
