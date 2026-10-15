@@ -191,6 +191,23 @@ const SEED_REPORT = {
   created_at: '2026-06-19T13:00:00Z',
 };
 
+// A report whose template asks for YAML frontmatter, attached instead when
+// STENOAI_E2E_SEED_REPORT=frontmatter (report-properties T1). The title is
+// not the note's on purpose: title and date are left out of the properties by
+// key, whatever their value.
+const SEED_FRONTMATTER_REPORT = {
+  id: 'rep_e2e_frontmatter',
+  template_id: 'tpl_e2e_client_call',
+  template_name: 'Client Call',
+  model: 'mock-model',
+  content:
+    '---\ntitle: "Erika Mustermann: Empty Bcc field"\ndate: 2026-06-19\n'
+    + 'client: Erika Mustermann\norganisation: Example Ltd\nissue: Empty Bcc field\n'
+    + 'symptoms:\n  - Bcc stays empty on send\nresolved: true\n---\n\n'
+    + '## Summary\nThe Bcc field stayed empty until the signature was recreated.',
+  created_at: '2026-06-19T13:00:00Z',
+};
+
 // Mutable so the stateful set-active-report mock below persists the pill
 // switch across the invalidate → get-meeting refetch, like the real sidecar.
 let seedActiveReport = null;
@@ -205,6 +222,9 @@ const seededMeeting = () => {
           '[00:00] [You] We should ship Friday.\n[00:02] [You] I will prepare the release.\n[00:06] [Others] Sounds good.',
       }
     : SEED_MEETING;
+  if (process.env.STENOAI_E2E_SEED_REPORT === 'frontmatter') {
+    return { ...meeting, reports: [SEED_FRONTMATTER_REPORT], active_report: seedActiveReport };
+  }
   return process.env.STENOAI_E2E_SEED_REPORT === '1'
     ? { ...meeting, reports: [SEED_REPORT], active_report: seedActiveReport }
     : meeting;
@@ -565,10 +585,16 @@ function install({ ipcMain }) {
       chatSessions = data;
       return { success: true };
     },
+    // Off by default, so the Re-transcribe entry only shows for specs that
+    // opt in (note-generation-error.t1's re-transcribe refusal).
+    'recording-available': async () => ({
+      success: true,
+      available: process.env.STENOAI_E2E_RECORDING_AVAILABLE === '1',
+    }),
     // Record every call for the editor guards, including requests held open
     // so the generation-error specs can inject a failure and retry.
-    'reprocess-meeting': async (_event, summaryFile, regenerateTitle, sessionName) => {
-      global.__stenoaiE2eReprocessCalls.push({ summaryFile, regenerateTitle, sessionName });
+    'reprocess-meeting': async (_event, summaryFile, regenerateTitle, sessionName, retranscribe) => {
+      global.__stenoaiE2eReprocessCalls.push({ summaryFile, regenerateTitle, sessionName, retranscribe });
       if (process.env.STENOAI_E2E_REPROCESS_PENDING !== '1') return { success: true };
       const state = global.__reprocessTest || (global.__reprocessTest = { calls: 0 });
       state.calls++;

@@ -3027,6 +3027,7 @@ function parseMeetingMarkdown(content, mdPath) {
     diarised_text: meta.is_diarised ? sections.transcript || '' : null,
     user_notes: sections['user notes'] ?? null,
     folders: meta.folders || [],
+    continued_recordings: Array.isArray(meta.continued_recordings) ? meta.continued_recordings : [],
   };
 }
 
