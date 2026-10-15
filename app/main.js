@@ -6881,6 +6881,7 @@ ipcMain.handle('start-recording-ui', async (_, sessionName, trigger, appendTo) =
     console.error('Start recording UI error:', error.message);
     systemAudioRecordingActive = false;
     currentRecordingSessionName = null;
+    autoStarts.startFailed();
     currentRecordingAppendTarget = null;
     resetRecordingRuntimeState();
     updateTrayIcon(false);
@@ -10641,11 +10642,16 @@ ipcMain.on('recording-capture-error', (_event, message, name, phase) => {
   // message itself is never consulted.
   sendDebugLog(`[sysaudio] capture error (${phase || 'start'}): ${name ? `${name}: ` : ''}${message}`);
   if ((phase || 'start') === 'start') {
-    // A confirmed failed start, never a capture flap ('ongoing' covers those).
-    // Drop its pending auto-record announcement, and the session name the
-    // start set: it names no recording now, and requestAutoRecord's guard
-    // (#566) would otherwise refuse every later detection until the next
-    // recording replaced it.
+    // Capture failed to start a recording main had accepted; never a capture
+    // flap ('ongoing' covers those). Drop its pending auto-record announcement,
+    // and the session name the start set: it names no recording now, and
+    // requestAutoRecord's guard (#566) would otherwise refuse every later
+    // detection until the next recording replaced it.
+    //
+    // 'request' is different: start-recording-ui itself refused the start (a
+    // recording was already running) or failed and cleaned up after itself.
+    // Either way main's state is already right, and after a refusal it belongs
+    // to the recording that is still running, so it is left alone.
     autoStarts.startFailed();
     if (!currentRecordingProcess) currentRecordingSessionName = null;
   }

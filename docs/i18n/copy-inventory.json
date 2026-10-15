@@ -1495,7 +1495,7 @@
         "queue",
         "recording",
         "recording",
-        "start",
+        "request",
         "stop",
         "tray",
         "url_scheme",
@@ -2984,8 +2984,8 @@
       "copy": [
         "Auto-record detected meetings",
         "Auto-record detected meetings",
-        "Disable",
         "I understand",
+        "Keep off",
         "Note that many jurisdictions only permit recording a conversation after all participants have given their consent.",
         "Recording consent",
         "Requires macOS 14 (Sonoma) or later.",

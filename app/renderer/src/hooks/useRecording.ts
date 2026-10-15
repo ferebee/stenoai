@@ -191,11 +191,14 @@ export function useRecording() {
         // Every caller is fire-and-forget (`void startRecording()`), so an
         // IPC-level failure would otherwise be a silent no-op: the pill
         // flashes out with no explanation. Route it through the same native
-        // notification the renderer-capture failure path uses.
+        // notification the renderer-capture failure path uses. As 'request',
+        // not 'start': main refused this start (a recording is already
+        // running, e.g. a second URL-scheme start) or failed it and cleaned up
+        // itself, so main must not reset the state of the running recording.
         ipc().recording.reportCaptureError(
           err instanceof Error ? err.message : 'Recording could not start',
           undefined,
-          'start'
+          'request'
         );
         throw err;
       }

@@ -48,13 +48,13 @@ describe('AutoRecordRow', () => {
     expect(screen.queryByText(consent)).toBeNull();
   });
 
-  test('"Disable" leaves it off and saves nothing', async () => {
+  test('"Keep off" leaves it off and saves nothing', async () => {
     render(<AutoRecordRow detectionSupported detectionOn />);
     await act(async () => {
       fireEvent.click(toggle());
     });
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Disable' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Keep off' }));
     });
     expect(h.setAutoRecord.mutate).not.toHaveBeenCalled();
     expect(screen.queryByText(consent)).toBeNull();

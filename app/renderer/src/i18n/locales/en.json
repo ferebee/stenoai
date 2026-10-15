@@ -501,7 +501,7 @@
   "settings.general.autoRecord.requiresMacos14": "Requires macOS 14 (Sonoma) or later.",
   "settings.general.autoRecord.consent.title": "Recording consent",
   "settings.general.autoRecord.consent.body": "Note that many jurisdictions only permit recording a conversation after all participants have given their consent.",
-  "settings.general.autoRecord.consent.disable": "Disable",
+  "settings.general.autoRecord.consent.keepOff": "Keep off",
   "settings.general.autoRecord.consent.confirm": "I understand",
   "settings.general.autoRecord.search": "Record a detected meeting without asking",
   "settings.general.microphoneNumber": "Microphone {{number}}",

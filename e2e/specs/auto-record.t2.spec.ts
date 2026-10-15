@@ -74,7 +74,7 @@ test('a detected call records without asking, leaves the view alone, and its toa
   await expect.poll(() => hasRecording(page)).toBe(false);
 });
 
-test("the toast's Stop ends its recording, and a later recording by hand gets no toast", async ({
+test("a refused second start leaves the recording alone, the toast's Stop ends it, and a later recording by hand gets no toast", async ({
   launchApp,
   userDataDir,
 }) => {
@@ -84,10 +84,28 @@ test("the toast's Stop ends its recording, and a later recording by hand gets no
     ipcMain.on('system-audio-recording-state', (_event: unknown, active: boolean) => {
       (globalThis as any).__captureActive = active;
     });
+    (globalThis as any).__capturePhases = [];
+    ipcMain.on('recording-capture-error', (_event: unknown, _message: string, _name: string, phase: string) => {
+      (globalThis as any).__capturePhases.push(phase);
+    });
   });
 
   await detect(app, CALL);
   await expect.poll(async () => (await startedToasts(app)).length, { timeout: 15_000 }).toBe(1);
+  const sessionName = await page.evaluate(async () => (await window.stenoai.recording.getQueue()).sessionName);
+
+  // A second start reaching the renderer during the recording, as a Shortcuts
+  // start racing main's status check delivers it, is refused by main. It
+  // reports as 'request' and leaves the running recording's state alone (#579
+  // review).
+  await app.evaluate(({ BrowserWindow }) => {
+    const main = BrowserWindow.getAllWindows().find((w) => !w.webContents.getURL().includes('#/notification'));
+    main!.webContents.send('shortcut-start-recording', { sessionName: 'Second start' });
+  });
+  await expect.poll(() => app.evaluate(() => (globalThis as any).__capturePhases)).toEqual(['request']);
+  expect(await hasRecording(page)).toBe(true);
+  expect(await page.evaluate(async () => (await window.stenoai.recording.getQueue()).sessionName)).toBe(sessionName);
+
   await (await startedToasts(app))[0].getByRole('button', { name: 'Stop' }).click();
   await expect.poll(() => hasRecording(page)).toBe(false);
 

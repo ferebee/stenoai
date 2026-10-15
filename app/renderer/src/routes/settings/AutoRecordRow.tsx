@@ -56,7 +56,7 @@ export function AutoRecordRow({
         onOpenChange={setConfirmOpen}
         title={t('settings.general.autoRecord.consent.title')}
         description={t('settings.general.autoRecord.consent.body')}
-        cancelLabel={t('settings.general.autoRecord.consent.disable')}
+        cancelLabel={t('settings.general.autoRecord.consent.keepOff')}
         confirmLabel={t('settings.general.autoRecord.consent.confirm')}
         onConfirm={() => {
           setAutoRecord.mutate(true);

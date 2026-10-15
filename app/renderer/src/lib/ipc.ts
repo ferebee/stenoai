@@ -1162,8 +1162,10 @@ export interface StenoaiBridge {
     startLinuxLoopback: RequestFn<[], Result<{ sampleRate: number; channels: number }>>;
     stopLinuxLoopback: RequestFn<[], Result<Record<string, never>>>;
     /** Report a renderer-side capture failure so main can surface a native
-     *  notification (a failed start would otherwise be silent). Fire-and-forget. */
-    reportCaptureError: SendFn<[message: string, name?: string, phase?: 'start' | 'ongoing' | 'stop']>;
+     *  notification (a failed start would otherwise be silent). Fire-and-forget.
+     *  'request': start-recording-ui refused or failed the start, so main's
+     *  state is already right; 'start': capture failed after main accepted it. */
+    reportCaptureError: SendFn<[message: string, name?: string, phase?: 'request' | 'start' | 'ongoing' | 'stop']>;
     processSystemAudio: RequestFn<[filePath: string, name: string], Result<{ message: string }>>;
     // Fire-and-forget: the handler copies the file into recordings/ and queues
     // it (addToProcessingQueue), then resolves immediately with no payload —
