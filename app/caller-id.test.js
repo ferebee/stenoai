@@ -253,6 +253,22 @@ for (const reenable of [false, true]) {
   });
 }
 
+for (const startsDisabled of [false, true]) {
+  test(`enabling during a recording identifies its caller (${startsDisabled ? 'initially off' : 'off/on'})`, async () => {
+    const { callerId, applied } = setup({ history: [entry({ start: 0, duration: 113 })] });
+    if (startsDisabled) callerId.setEnabled(false);
+    callerId.micEvent(mic('start', 0.4));
+    callerId.recordingStarted('stem', ms(1));
+    if (!startsDisabled) callerId.setEnabled(false);
+    callerId.setEnabled(true);
+    callerId.micEvent(mic('stop', 56));
+    callerId.recordingStopped(ms(58));
+    await callerId.idle();
+    assert.strictEqual(applied.length, 1);
+    assert.strictEqual(applied[0].calls[0].name, 'Erika Mustermann');
+  });
+}
+
 test('switching off cancels the deferred update after processing', async () => {
   let busy = true;
   const { callerId, applied } = setup({ history: [entry({ start: 0, duration: 113 })], busy: () => busy });

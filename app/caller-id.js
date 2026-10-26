@@ -79,12 +79,15 @@ class CallerId {
     if (this.enabled) this.imcp.start();
     else {
       this.imcp.stop();
-      for (const rec of this._recordings) rec.finalApply = false;
+      for (const rec of this._recordings) {
+        rec.finalApply = null;
+        rec.calls.clear();
+      }
     }
   }
 
-  _isCurrent(rec) {
-    return this.enabled && rec.generation === this._generation;
+  _isCurrent(generation) {
+    return this.enabled && generation === this._generation;
   }
 
   /** Feed every mic-monitor event; only call audio is kept. */
@@ -107,8 +110,8 @@ class CallerId {
   /** A recording began; `stem` names the note it lands in. */
   recordingStarted(stem, at = this.now()) {
     if (!stem) return;
-    this._recordings.push({ stem, generation: this._generation, startedAt: at, stoppedAt: null, calls: new Map(),
-      tried: new Set(), finalApply: false });
+    this._recordings.push({ stem, startedAt: at, stoppedAt: null, calls: new Map(),
+      tried: new Set(), finalApply: null });
   }
 
   /** The current recording stopped. Safe to call more than once. */
@@ -127,9 +130,10 @@ class CallerId {
   /** A processing job finished; `stems` are the notes it wrote. */
   processingFinished(stems) {
     for (const rec of this._recordings) {
-      if (this._isCurrent(rec) && rec.finalApply && stems.includes(rec.stem)) {
-        rec.finalApply = false;
-        this._run(this._apply(rec, false));
+      if (rec.finalApply !== null && this._isCurrent(rec.finalApply) && stems.includes(rec.stem)) {
+        const generation = rec.finalApply;
+        rec.finalApply = null;
+        this._run(this._apply(rec, false, generation));
       }
     }
   }
@@ -141,8 +145,9 @@ class CallerId {
   }
 
   async _lookup(rec, session, { once = false } = {}) {
-    if (!this._isCurrent(rec)) return;
-    const attempt = `${session.key}@${session.startedAt}:${session.endedAt ?? 'running'}`;
+    const generation = this._generation;
+    if (!this._isCurrent(generation)) return;
+    const attempt = `${generation}:${session.key}@${session.startedAt}:${session.endedAt ?? 'running'}`;
     if (rec.tried.has(attempt)) return;
     rec.tried.add(attempt);
 
@@ -152,12 +157,12 @@ class CallerId {
     for (let i = 0; i < attempts; i += 1) {
       if (i > 0) await this.sleep(this.lookupIntervalMs);
       else if (audio.endedAt) await this.sleep(this.recordDelayMs);
-      if (!this._isCurrent(rec)) return;
+      if (!this._isCurrent(generation)) return;
       if (this.imcp.status.state !== 'ready') continue;
       try {
         const call = matchCall(await this.imcp.recentCalls(RECENT_CALLS), audio);
         if (call) {
-          await this._found(rec, call);
+          await this._found(rec, call, generation);
           return;
         }
       } catch (error) {
@@ -167,8 +172,8 @@ class CallerId {
     this.log(`[caller-id] no call found for a recording (${once ? 'call still running' : 'after the call'})`);
   }
 
-  async _found(rec, call) {
-    if (!this._isCurrent(rec)) return;
+  async _found(rec, call, generation) {
+    if (!this._isCurrent(generation)) return;
     const key = call.id ?? call.startedAt.toISOString();
     if (rec.calls.has(key)) return;
     let name = call.name;
@@ -180,21 +185,21 @@ class CallerId {
     }
     // Turning the feature off cancels this lookup, even if it is enabled
     // again before the Contacts request resolves.
-    if (!this._isCurrent(rec)) return;
+    if (!this._isCurrent(generation)) return;
     rec.calls.set(key, { name: name || null, number: call.number, direction: call.direction,
       service: call.service, started_at: call.startedAt.toISOString() });
     this.log(`[caller-id] call found for a recording (${name ? 'named' : 'number only'})`);
     const busy = this.isProcessing(rec.stem);
-    if (busy) rec.finalApply = true;
-    await this._apply(rec, busy);
+    if (busy) rec.finalApply = generation;
+    await this._apply(rec, busy, generation);
   }
 
   // One write per note at a time: the backend adds these calls to those it has
   // stored, and two writes at once could each miss the other's.
-  _apply(rec, sidecarOnly) {
+  _apply(rec, sidecarOnly, generation) {
     const write = (this._writes.get(rec.stem) || Promise.resolve())
       .then(() => {
-        if (this._isCurrent(rec)) {
+        if (this._isCurrent(generation)) {
           return this.applyCallInfo(rec.stem, [...rec.calls.values()], { sidecarOnly });
         }
       })
