@@ -25,7 +25,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('./useRecording', () => ({
-  useRecording: () => ({ status: h.status, sessionName: 'Unmount note' }),
+  useRecording: () => ({ status: h.status, sessionName: 'Unmount note', recordingId: h.status === 'recording' ? 'test-recording' : null }),
 }));
 vi.mock('./useModels', () => ({
   useTranscriptionEngine: () => ({ data: 'parakeet' }),
@@ -83,7 +83,7 @@ describe('useSystemAudioCapture unmount cleanup (#568)', () => {
     unmount();
 
     expect(h.liveStop).toHaveBeenCalledTimes(1);
-    expect(h.reportState).toHaveBeenCalledWith(false);
+    expect(h.reportState).toHaveBeenCalledWith(false, 'test-recording');
   });
 
   test('leaves live transcription alone when no capture was running', () => {

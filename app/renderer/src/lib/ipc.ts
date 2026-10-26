@@ -378,7 +378,7 @@ export type RecordingTrigger = 'manual' | 'notification_click' | 'hotkey' | 'tra
  *  from Settings, so this does not mean "first run". */
 export type TelemetryToggleSource = 'setup' | 'settings' | 'consent';
 
-export type StartRecordingResponse = Result<{ message: string; sessionName?: string }>;
+export type StartRecordingResponse = Result<{ message: string; sessionName?: string; recordingId?: string }>;
 export type StopRecordingResponse = Result<{
   message: string;
   sessionName?: string;
@@ -1134,7 +1134,7 @@ export interface StenoaiBridge {
     stop: RequestFn<[], StopRecordingResponse>;
     pause: RequestFn<[], PauseRecordingResponse>;
     resume: RequestFn<[], ResumeRecordingResponse>;
-    reportSystemAudioState: SendFn<[active: boolean]>;
+    reportSystemAudioState: SendFn<[active: boolean, recordingId?: string]>;
     /** Hint that a recording may be imminent so main can re-warm the Parakeet
      *  model. Throttled main-side. Fire-and-forget. */
     hintWarmup: SendFn<[]>;

@@ -46,7 +46,7 @@ const SILENCE_SAMPLE_INTERVAL_MS = 1_000;
  * subprocess fallback — capture always happens here, on every platform.
  */
 export function useSystemAudioCapture() {
-  const { status, sessionName } = useRecording();
+  const { status, sessionName, recordingId } = useRecording();
   const systemAudio = useSystemAudioSetting();
   const systemAudioSupport = useSystemAudioSupport();
   const engineQuery = useTranscriptionEngine();
@@ -130,6 +130,14 @@ export function useSystemAudioCapture() {
   const appendFailedRef = React.useRef(false);
   const sessionNameRef = React.useRef<string | null>(null);
   const activeRef = React.useRef(false);
+  const activeRecordingIdRef = React.useRef<string | null>(null);
+  const openInFlightRef = React.useRef<Promise<unknown> | null>(null);
+  const stopInFlightRef = React.useRef<Promise<void> | null>(null);
+  const mountedRef = React.useRef(true);
+  const desiredCaptureRef = React.useRef({ status, recordingId });
+  React.useEffect(() => {
+    desiredCaptureRef.current = { status, recordingId };
+  }, [status, recordingId]);
   // Bumped by stopCapture so any in-flight startCapture awaiting
   // getUserMedia/getDisplayMedia knows it's been cancelled and aborts
   // before installing the streams it just acquired.
@@ -186,9 +194,10 @@ export function useSystemAudioCapture() {
       recorderRef.current = null;
     };
 
-    const startCapture = async () => {
-      if (activeRef.current) return;
+    const startCapture = async (captureId: string) => {
+      if (activeRef.current || stopInFlightRef.current) return;
       activeRef.current = true;
+      activeRecordingIdRef.current = captureId;
       // Capture the start-token so async aborts can detect cancellation:
       // stopCapture (or the unmount cleanup) bumps startTokenRef and we
       // bail at the next checkpoint after stopping any tracks we already
@@ -548,13 +557,26 @@ export function useSystemAudioCapture() {
         //    file. Open the on-disk file first; if that fails there's nowhere
         //    to write, so abort (caught below → mic-only would also have no
         //    file, so this is a hard failure).
+        if (cancelled()) { stopAcquired(); return; }
         const name = sessionNameRef.current ?? 'Note';
-        const opened = await bridge.recording.openSystemAudioFile(name);
+        const opening = (async () => {
+          const result = await bridge.recording.openSystemAudioFile(name);
+          if (cancelled() && result.success) {
+            try { await bridge.recording.closeSystemAudioFile(); } catch { /* best-effort */ }
+          }
+          return result;
+        })();
+        openInFlightRef.current = opening;
+        let opened;
+        try {
+          opened = await opening;
+        } finally {
+          if (openInFlightRef.current === opening) openInFlightRef.current = null;
+        }
         if (cancelled()) {
           // Cancelled after the file opened — close it so the main-side write
           // stream isn't leaked (it'd otherwise linger until the next open).
           stopAcquired();
-          if (opened.success) void bridge.recording.closeSystemAudioFile();
           return;
         }
         if (!opened.success) {
@@ -610,6 +632,9 @@ export function useSystemAudioCapture() {
         recorder.start(1_000);
         recorderRef.current = recorder;
         recorderStarted = true;
+        if (desiredCaptureRef.current.recordingId === captureId && desiredCaptureRef.current.status === 'paused') {
+          recorder.pause();
+        }
 
         // 5. Silence-auto-stop detector. Taps each pre-merge source with its
         //    own AnalyserNode so we can distinguish "mic active" from
@@ -817,7 +842,7 @@ export function useSystemAudioCapture() {
         // 6. Confirm to main that the renderer-driven recording is live.
         //    Idempotent — main.js already flipped systemAudioRecordingActive
         //    when start-recording-ui ran, but this re-affirms it.
-        bridge.recording.reportSystemAudioState(true);
+        bridge.recording.reportSystemAudioState(true, captureId);
         // Only now, with the recorder running: the user's own voice is not in
         // this recording, and they should hear that from us, not from the note.
         if (noInputDeviceErr) {
@@ -837,6 +862,7 @@ export function useSystemAudioCapture() {
         console.error('[systemAudioCapture] start failed', err);
         teardownStreams();
         activeRef.current = false;
+        activeRecordingIdRef.current = null;
         // Close any file opened before the failure so we don't leak the
         // main-side write stream (no-op if open never ran).
         try {
@@ -873,9 +899,11 @@ export function useSystemAudioCapture() {
         // Tell main to drop the stuck "recording" pill — its optimistic
         // systemAudioRecordingActive flag was set on start-recording-ui. Keep
         // this LAST: after it, a successor may start immediately.
-        bridge.recording.reportSystemAudioState(false);
+        bridge.recording.reportSystemAudioState(false, captureId);
       }
     };
+
+    const beginCapture = (captureId: string) => { void startCapture(captureId); };
 
     const stopCapture = async () => {
       // Invalidate any in-flight startCapture awaiting media APIs — its
@@ -883,12 +911,17 @@ export function useSystemAudioCapture() {
       // tear down the streams it acquired without installing them.
       startTokenRef.current++;
       if (!activeRef.current) return;
-      activeRef.current = false;
+      const captureId = activeRecordingIdRef.current;
       const recorder = recorderRef.current;
       if (!recorder || recorder.state === 'inactive') {
-        teardownStreams();
         try { await bridge.recording.disableLoopbackAudio(); } catch { /* */ }
-        bridge.recording.reportSystemAudioState(false);
+        // A pending openSystemAudioFile may resolve after the stop. Let that
+        // cancelled start close its own file before B can open a successor.
+        if (openInFlightRef.current) {
+          try { await openInFlightRef.current; } catch { /* startCapture handles the error */ }
+        }
+        teardownStreams();
+        bridge.recording.reportSystemAudioState(false, captureId ?? undefined);
         return;
       }
       // Match useRecording.startRecording's 'Note' placeholder so the
@@ -929,11 +962,27 @@ export function useSystemAudioCapture() {
           } finally {
             teardownStreams();
             try { await bridge.recording.disableLoopbackAudio(); } catch { /* */ }
-            bridge.recording.reportSystemAudioState(false);
+            bridge.recording.reportSystemAudioState(false, captureId ?? undefined);
             resolve();
           }
         };
         recorder.stop();
+      });
+    };
+
+    const stopThenMaybeRestart = () => {
+      if (stopInFlightRef.current) return;
+      const stoppedId = activeRecordingIdRef.current;
+      const pending = stopCapture();
+      stopInFlightRef.current = pending;
+      void pending.finally(() => {
+        activeRef.current = false;
+        activeRecordingIdRef.current = null;
+        stopInFlightRef.current = null;
+        const desired = desiredCaptureRef.current;
+        if (mountedRef.current && (desired.status === 'recording' || desired.status === 'paused') && desired.recordingId && desired.recordingId !== stoppedId) {
+          beginCapture(desired.recordingId);
+        }
       });
     };
 
@@ -942,8 +991,10 @@ export function useSystemAudioCapture() {
     // is off/unsupported). The system-audio toggle no longer starts or stops
     // capture; it only affects whether loopback is mixed in on the NEXT start
     // (read via loopbackEnabledRef inside startCapture).
-    if (status === 'recording' && !activeRef.current) {
-      void startCapture();
+    if (activeRef.current && activeRecordingIdRef.current !== recordingId) {
+      stopThenMaybeRestart();
+    } else if ((status === 'recording' || status === 'paused') && recordingId && !activeRef.current && !stopInFlightRef.current) {
+      beginCapture(recordingId);
     } else if (
       status === 'paused' &&
       recorderRef.current?.state === 'recording'
@@ -958,12 +1009,12 @@ export function useSystemAudioCapture() {
       (status === 'idle' || status === 'processing') &&
       activeRef.current
     ) {
-      void stopCapture();
+      stopThenMaybeRestart();
     }
     // qc (useQueryClient()) is referentially stable for the app's lifetime
     // (the same QueryClient instance from the root Provider) — listing it
     // here doesn't cause extra effect re-runs, it just satisfies the rule.
-  }, [status, qc]);
+  }, [status, recordingId, qc]);
 
   // Unmount-only safety net (empty deps = no cleanup on dep changes). Runs
   // when the App tree unmounts (e.g. window close, page reload, StrictMode
@@ -973,7 +1024,9 @@ export function useSystemAudioCapture() {
   // lost mid-stop.
   React.useEffect(() => {
     const bridge = ipc();
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
       // Invalidate a media request that resolves or rejects after unmount. The
       // cleanup below owns this hook instance's resources; its abandoned async
       // start must not later touch global IPC state owned by a remount.
@@ -1006,7 +1059,7 @@ export function useSystemAudioCapture() {
       // activeRef.current is still true only when THIS unmount owns the live
       // capture; if stopCapture already took over it has flipped it false (and
       // its own onstop will flush+close), so we must not clobber that handoff.
-      const hadOpenFile = activeRef.current;
+      const hadOpenFile = activeRef.current && !stopInFlightRef.current;
       if (hadOpenFile && recorder && recorder.state !== 'inactive') {
         recorder.onstop = closeFile;
         try { recorder.stop(); } catch { closeFile(); }
@@ -1040,7 +1093,7 @@ export function useSystemAudioCapture() {
         // would otherwise run on, blocking Parakeet re-warm and idle update
         // installs, until the next recording replaces it.
         bridge.liveTranscript.stop();
-        bridge.recording.reportSystemAudioState(false);
+        bridge.recording.reportSystemAudioState(false, activeRecordingIdRef.current ?? undefined);
       }
     };
   }, []);

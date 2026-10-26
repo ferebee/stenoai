@@ -612,7 +612,7 @@ function install({ ipcMain }) {
       rec.appendTo = appendTo && String(appendTo).trim() ? String(appendTo).trim() : null;
       rec.startedAt = Date.now();
       rec.recordingId = String(rec.startedAt);
-      return { success: true, sessionName: rec.sessionName };
+      return { success: true, sessionName: rec.sessionName, recordingId: rec.recordingId };
     },
     'stop-recording-ui': async () => {
       rec.active = false;

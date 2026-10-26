@@ -163,6 +163,7 @@ export function useRecording() {
         queueSize: 0,
         currentJob: null,
         hasRecording: true,
+        recordingId: null,
         isPaused: false,
         elapsedSeconds: 0,
         sessionName: optimisticName,
@@ -177,6 +178,13 @@ export function useRecording() {
       // optional live-note editor but is never forced.
       try {
         const data = unwrap(await ipc().recording.start(name, trigger, appendTo));
+        if (data.recordingId) {
+          qc.setQueryData<QueueStatus>(queueKey, (current) =>
+            current?.hasRecording
+              ? { ...current, recordingId: data.recordingId }
+              : current
+          );
+        }
         qc.invalidateQueries({ queryKey: queueKey });
         return data;
       } catch (err) {
@@ -213,6 +221,7 @@ export function useRecording() {
       queueSize: prev?.queueSize ?? 0,
       currentJob: prev?.sessionName ?? prev?.currentJob ?? null,
       hasRecording: false,
+      recordingId: null,
       isPaused: false,
       elapsedSeconds: 0,
       sessionName: prev?.sessionName ?? null,
