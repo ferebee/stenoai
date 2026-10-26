@@ -19,6 +19,9 @@ import type { Meeting, QueueStatus, RecordingTrigger } from '@/lib/ipc';
 export type RecordingStatus = 'idle' | 'recording' | 'paused' | 'processing';
 
 const queueKey = ['recording', 'queue'] as const;
+// Shared across the many useRecording consumers. A Stop invalidates any Start
+// still awaiting queue cancellation or main's previous-capture handoff.
+let recordingStopVersion = 0;
 
 // ── Shared window-visibility subscription ───────────────────────────────
 //
@@ -120,6 +123,7 @@ export function useRecording() {
 
   const startRecording = React.useCallback(
     async (name?: string, trigger: RecordingTrigger = 'manual', appendTo?: string) => {
+      const requestStopVersion = recordingStopVersion;
       // Optimistic cache write so the UI flips to status='recording'
       // instantly. The backend's start-recording-ui has a 2s warm-up and
       // the next queue poll (1s) will reconcile sessionName + elapsed.
@@ -156,6 +160,10 @@ export function useRecording() {
       // (the standard onMutate pattern) instead of showing a phantom
       // "recording" pill until an invalidate round-trips.
       await qc.cancelQueries({ queryKey: queueKey });
+      if (requestStopVersion !== recordingStopVersion) {
+        if (priorDraft) useLiveDraftStore.getState().restore(optimisticName, priorDraft);
+        return;
+      }
       const priorQueue = qc.getQueryData<QueueStatus>(queueKey);
       qc.setQueryData(queueKey, {
         success: true,
@@ -177,7 +185,15 @@ export function useRecording() {
       // whatever route the user is on; /recording stays reachable as an
       // optional live-note editor but is never forced.
       try {
-        const data = unwrap(await ipc().recording.start(name, trigger, appendTo));
+        const response = await ipc().recording.start(name, trigger, appendTo);
+        if (requestStopVersion !== recordingStopVersion) return;
+        if (!response.success && response.cancelled) {
+          if (priorDraft) useLiveDraftStore.getState().restore(optimisticName, priorDraft);
+          qc.setQueryData(queueKey, priorQueue);
+          qc.invalidateQueries({ queryKey: queueKey });
+          return;
+        }
+        const data = unwrap(response);
         if (data.recordingId) {
           qc.setQueryData<QueueStatus>(queueKey, (current) =>
             current?.hasRecording
@@ -188,6 +204,7 @@ export function useRecording() {
         qc.invalidateQueries({ queryKey: queueKey });
         return data;
       } catch (err) {
+        if (requestStopVersion !== recordingStopVersion) return;
         // Roll back optimistic state. Restore the prior draft too — the
         // recording never started so the previous session (probably still
         // mid-processing) shouldn't lose its in-memory title / notes.
@@ -212,6 +229,7 @@ export function useRecording() {
   );
 
   const stopRecording = React.useCallback(async ({ navigateToNote = true }: { navigateToNote?: boolean } = {}) => {
+    recordingStopVersion++;
     // Optimistic: flip the queue cache to processing so the UI can swap the
     // pill for the processing dock instantly, before the backend SIGTERM
     // round-trip.

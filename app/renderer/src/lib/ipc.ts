@@ -378,7 +378,7 @@ export type RecordingTrigger = 'manual' | 'notification_click' | 'hotkey' | 'tra
  *  from Settings, so this does not mean "first run". */
 export type TelemetryToggleSource = 'setup' | 'settings' | 'consent';
 
-export type StartRecordingResponse = Result<{ message: string; sessionName?: string; recordingId?: string }>;
+export type StartRecordingResponse = Result<{ message: string; sessionName?: string; recordingId?: string }> & { cancelled?: boolean };
 export type StopRecordingResponse = Result<{
   message: string;
   sessionName?: string;
@@ -1135,6 +1135,7 @@ export interface StenoaiBridge {
     pause: RequestFn<[], PauseRecordingResponse>;
     resume: RequestFn<[], ResumeRecordingResponse>;
     reportSystemAudioState: SendFn<[active: boolean, recordingId?: string]>;
+    claimSystemAudioCapture: RequestFn<[recordingId: string], { success: boolean; cancelled?: boolean }>;
     /** Hint that a recording may be imminent so main can re-warm the Parakeet
      *  model. Throttled main-side. Fire-and-forget. */
     hintWarmup: SendFn<[]>;
@@ -1152,9 +1153,9 @@ export interface StenoaiBridge {
     /** Open an on-disk WebM file for the renderer-driven recording. Chunks are
      *  appended as they arrive (see appendSystemAudioChunk) so a crash leaves a
      *  processable file instead of losing the whole recording. */
-    openSystemAudioFile: RequestFn<[name: string], Result<{ filePath: string }>>;
-    appendSystemAudioChunk: RequestFn<[bytes: Uint8Array], Result<Record<string, never>>>;
-    closeSystemAudioFile: RequestFn<[], Result<{ filePath: string }>>;
+    openSystemAudioFile: RequestFn<[name: string, recordingId?: string], Result<{ filePath: string }>>;
+    appendSystemAudioChunk: RequestFn<[bytes: Uint8Array, recordingId?: string], Result<Record<string, never>>>;
+    closeSystemAudioFile: RequestFn<[recordingId?: string], Result<{ filePath: string }>>;
     /** Linux-only: starts a pw-record subprocess in main capturing the default
      *  sink's monitor (see app/linux-loopback.js). PCM arrives via
      *  on.linuxLoopbackChunk, not through getDisplayMedia. */
@@ -1518,6 +1519,7 @@ export interface StenoaiBridge {
     trayStopRecording: Subscribe<void>;
     autoRecordRequested: Subscribe<{ sessionName?: string; appName?: string }>;
     autoPauseRequested: Subscribe<void>;
+    recordingStopRequested: Subscribe<{ recordingId: string }>;
     autoResumeRequested: Subscribe<void>;
     autoSummariseRequested: Subscribe<void>;
     /** Main asks the renderer to generate notes for a transcript-only note in

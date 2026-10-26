@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { ipc } from '@/lib/ipc';
+import { ipc, type QueueStatus } from '@/lib/ipc';
 import { appendDebugLog } from '@/lib/debugLogs';
 import { isLinux, isMac } from '@/lib/utils';
 import { startLinuxLoopbackStream, type LinuxLoopbackStream } from '@/lib/linuxLoopbackStream';
@@ -213,6 +213,15 @@ export function useSystemAudioCapture() {
       };
 
       try {
+        // Claim ownership before any media/file API. If main already stopped
+        // this generation, do not acquire a mic from a stale queue render.
+        const claim = await bridge.recording.claimSystemAudioCapture(captureId);
+        if (cancelled()) return;
+        if (!claim.success) {
+          activeRef.current = false;
+          activeRecordingIdRef.current = null;
+          return;
+        }
         // 1. Mic stream. Echo cancellation ON so speaker bleed (when not
         //    using headphones) doesn't double-up the remote audio in the
         //    mix. Noise suppression and AGC OFF — whisper handles ambient
@@ -560,9 +569,9 @@ export function useSystemAudioCapture() {
         if (cancelled()) { stopAcquired(); return; }
         const name = sessionNameRef.current ?? 'Note';
         const opening = (async () => {
-          const result = await bridge.recording.openSystemAudioFile(name);
+          const result = await bridge.recording.openSystemAudioFile(name, captureId);
           if (cancelled() && result.success) {
-            try { await bridge.recording.closeSystemAudioFile(); } catch { /* best-effort */ }
+            try { await bridge.recording.closeSystemAudioFile(captureId); } catch { /* best-effort */ }
           }
           return result;
         })();
@@ -605,7 +614,7 @@ export function useSystemAudioCapture() {
           appendChainRef.current = appendChainRef.current
             .then(async () => {
               const buf = new Uint8Array(await blob.arrayBuffer());
-              const res = await bridge.recording.appendSystemAudioChunk(buf);
+              const res = await bridge.recording.appendSystemAudioChunk(buf, captureId);
               // A resolved {success:false} (disk error, stream gone) isn't a
               // throw — check it explicitly so a write failure isn't silently
               // dropped. Surface it once; the file is now truncated.
@@ -866,7 +875,7 @@ export function useSystemAudioCapture() {
         // Close any file opened before the failure so we don't leak the
         // main-side write stream (no-op if open never ran).
         try {
-          await bridge.recording.closeSystemAudioFile();
+          await bridge.recording.closeSystemAudioFile(captureId);
         } catch {
           /* */
         }
@@ -939,7 +948,7 @@ export function useSystemAudioCapture() {
             // Flush any in-flight appends, then close the on-disk file and
             // hand the finished WebM to the processing queue.
             await appendChainRef.current;
-            const closed = await bridge.recording.closeSystemAudioFile();
+            const closed = await bridge.recording.closeSystemAudioFile(captureId ?? undefined);
             if (!closed.success) {
               // eslint-disable-next-line no-console
               console.error('[systemAudioCapture] close failed', closed.error);
@@ -986,12 +995,23 @@ export function useSystemAudioCapture() {
       });
     };
 
+    // Main sends this for every Stop, including hidden-window and direct IPC
+    // callers that do not optimistically change the React Query cache.
+    const offStopRequest = bridge.on.recordingStopRequested(({ recordingId: stoppedId }) => {
+      qc.setQueryData<QueueStatus>(['recording', 'queue'], (current) =>
+        current?.recordingId === stoppedId
+          ? { ...current, hasRecording: false, recordingId: null, isPaused: false }
+          : current
+      );
+      if (activeRecordingIdRef.current === stoppedId) stopThenMaybeRestart();
+    });
+
     // Capture is driven purely by the recording status now — it is the only
     // recording path, so it always runs while recording (mic-only when loopback
     // is off/unsupported). The system-audio toggle no longer starts or stops
     // capture; it only affects whether loopback is mixed in on the NEXT start
     // (read via loopbackEnabledRef inside startCapture).
-    if (activeRef.current && activeRecordingIdRef.current !== recordingId) {
+    if (activeRef.current && recordingId && activeRecordingIdRef.current !== recordingId) {
       stopThenMaybeRestart();
     } else if ((status === 'recording' || status === 'paused') && recordingId && !activeRef.current && !stopInFlightRef.current) {
       beginCapture(recordingId);
@@ -1014,6 +1034,7 @@ export function useSystemAudioCapture() {
     // qc (useQueryClient()) is referentially stable for the app's lifetime
     // (the same QueryClient instance from the root Provider) — listing it
     // here doesn't cause extra effect re-runs, it just satisfies the rule.
+    return offStopRequest;
   }, [status, recordingId, qc]);
 
   // Unmount-only safety net (empty deps = no cleanup on dep changes). Runs
@@ -1050,9 +1071,10 @@ export function useSystemAudioCapture() {
       // it. So close from the recorder's onstop (fires after the final
       // ondataavailable); fall back to an immediate chain when there's no live
       // recorder. Best-effort either way — unmount cleanup can't await.
+      const unmountRecordingId = activeRecordingIdRef.current ?? undefined;
       const closeFile = () => {
         void appendChainRef.current.finally(() =>
-          bridge.recording.closeSystemAudioFile(),
+          bridge.recording.closeSystemAudioFile(unmountRecordingId),
         );
       };
       const recorder = recorderRef.current;

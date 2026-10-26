@@ -44,9 +44,11 @@ vi.mock('@/lib/ipc', () => ({
     },
     recording: {
       reportSystemAudioState: h.reportState,
+      claimSystemAudioCapture: async () => ({ success: true }),
       disableLoopbackAudio: h.disableLoopback,
       closeSystemAudioFile: h.closeFile,
     },
+    on: { recordingStopRequested: () => () => {} },
     liveTranscript: { stop: h.liveStop, pushChunk: vi.fn() },
   }),
 }));

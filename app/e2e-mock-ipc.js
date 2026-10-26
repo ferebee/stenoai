@@ -605,6 +605,7 @@ function install({ ipcMain }) {
       });
     },
     'start-recording-ui': async (_event, name, _trigger, appendTo) => {
+      if (rec.active) return { success: false, error: 'Recording already in progress' };
       rec.active = true;
       rec.paused = false;
       rec.processing = false;
@@ -614,6 +615,9 @@ function install({ ipcMain }) {
       rec.recordingId = String(rec.startedAt);
       return { success: true, sessionName: rec.sessionName, recordingId: rec.recordingId };
     },
+    'claim-system-audio-capture': async (_event, recordingId) => ({
+      success: rec.active && rec.recordingId === recordingId,
+    }),
     'stop-recording-ui': async () => {
       rec.active = false;
       rec.paused = false;

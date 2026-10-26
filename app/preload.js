@@ -115,12 +115,13 @@ const stenoai = {
     pause: () => invoke('pause-recording-ui'),
     resume: () => invoke('resume-recording-ui'),
     reportSystemAudioState: (active, recordingId) => send('system-audio-recording-state', active, recordingId),
+    claimSystemAudioCapture: (recordingId) => invoke('claim-system-audio-capture', recordingId),
     enableLoopbackAudio: () => invoke('enable-loopback-audio'),
     disableLoopbackAudio: () => invoke('disable-loopback-audio'),
     getSystemAudioSupport: () => invoke('get-system-audio-support'),
-    openSystemAudioFile: (name) => invoke('open-system-audio-file', name),
-    appendSystemAudioChunk: (bytes) => invoke('append-system-audio-chunk', bytes),
-    closeSystemAudioFile: () => invoke('close-system-audio-file'),
+    openSystemAudioFile: (name, recordingId) => invoke('open-system-audio-file', name, recordingId),
+    appendSystemAudioChunk: (bytes, recordingId) => invoke('append-system-audio-chunk', bytes, recordingId),
+    closeSystemAudioFile: (recordingId) => invoke('close-system-audio-file', recordingId),
     // Linux-only loopback path (see app/linux-loopback.js) — starts a
     // pw-record subprocess in main and streams PCM back via
     // on.linuxLoopbackChunk instead of going through getDisplayMedia.
@@ -472,6 +473,7 @@ const stenoai = {
     trayStopRecording: (cb) => subscribe('tray-stop-recording', cb),
     autoRecordRequested: (cb) => subscribe('auto-record-requested', cb),
     autoPauseRequested: (cb) => subscribe('auto-pause-requested', cb),
+    recordingStopRequested: (cb) => subscribe('recording-stop-requested', cb),
     autoResumeRequested: (cb) => subscribe('auto-resume-requested', cb),
     autoSummariseRequested: (cb) => subscribe('auto-summarise-requested', cb),
     generateNotesRequested: (cb) => subscribe('generate-notes-requested', cb),

@@ -1785,6 +1785,10 @@ function createWindow(options = {}) {
 
   mainWindow = new BrowserWindow(windowOpts);
   hardenWindow(mainWindow, { allowExternalLinks: true });
+  const recordingWebContents = mainWindow.webContents;
+  recordingWebContents.on('did-start-navigation', (details) => {
+    if (details.isMainFrame && !details.isSameDocument) abandonCaptureForRenderer(recordingWebContents);
+  });
 
   const rendererDist = path.join(__dirname, 'renderer', 'dist', 'index.html');
   const hash = process.env.STENOAI_RENDERER_HASH;
@@ -1837,6 +1841,7 @@ function createWindow(options = {}) {
   mainWindow.on('focus', () => rewarmParakeet('window-focus'));
 
   mainWindow.on('closed', () => {
+    abandonCaptureForRenderer(recordingWebContents);
     mainWindow = null;
     rendererShortcutReady = false;
     // Abort any in-flight org SSE streams so they don't keep consuming
@@ -2593,6 +2598,7 @@ if (!gotSingleInstanceLock) {
   // Same telemetry gate, same "code not content" reasoning; see the
   // uncaughtException handler's comment for the capture-reliability caveat.
   app.on('render-process-gone', (_event, _webContents, details) => {
+    abandonCaptureForRenderer(_webContents);
     try {
       if (telemetryEnabled && posthogClient && anonymousId) {
         captureSanitizedException(
@@ -5343,6 +5349,8 @@ ipcMain.handle('get-queue-status', async () => {
     sessionName: currentRecordingSessionName,
     recordingId: systemAudioRecordingActive && recordingRuntimeState.startedAtMs
       ? String(recordingRuntimeState.startedAtMs) : null,
+    ...(ALLOW_E2E_PATH_SEAMS && process.env.STENOAI_E2E_HOLD_CAPTURE_ACK === '1'
+      ? { pendingRecordingStarts } : {}),
     chatSummaryFile: systemAudioRecordingActive
       ? (currentRecordingAppendTarget || activeSysAudioSummaryFile) : null,
     // The note (summary-file realpath) an active continue/resume is recording
@@ -6743,19 +6751,62 @@ function addToProcessingQueue(audioFile, sessionName, notesFile, liveTranscriptF
 // the segment's transcript is folded into that note instead of creating a
 // new one.
 let currentRecordingAppendTarget = null;
+let recordingRequestVersion = 0;
+let pendingRecordingStarts = 0;
+let captureClaimedRecordingId = null;
+let captureOwnerWebContents = null;
 // stop-recording-ui clears the visible state immediately, but the renderer
 // still has to flush and close the WebM. A succeeding start must wait for that
 // handoff so A's final chunk/append target cannot be attributed to B.
 let pendingCaptureStop = null;
+
+// A renderer reload/crash cannot deliver its final inactive report. It also
+// cannot write more audio: abandon only the file owned by that renderer, then
+// release its stop waiter. Keep the partial WebM on disk for recovery.
+function abandonCaptureForRenderer(webContents) {
+  const ownsCapture = captureOwnerWebContents === webContents;
+  const ownsStop = pendingCaptureStop?.owner === webContents;
+  if (!ownsCapture && !ownsStop) return;
+  const abandonedId = pendingCaptureStop?.recordingId || captureClaimedRecordingId;
+  if (activeSysAudioWriteStream) {
+    const stream = activeSysAudioWriteStream;
+    activeSysAudioWriteStream = null;
+    activeSysAudioFilePath = null;
+    activeSysAudioFileRecordingId = null;
+    activeSysAudioBytesWritten = 0;
+    try { stream.end(); } catch (_) { /* preserve the partial file */ }
+  }
+  if (ownsStop) pendingCaptureStop.settle();
+  captureClaimedRecordingId = null;
+  captureOwnerWebContents = null;
+  if (systemAudioRecordingActive && String(recordingRuntimeState.startedAtMs) === abandonedId) {
+    systemAudioRecordingActive = false;
+    currentRecordingSessionName = null;
+    currentRecordingAppendTarget = null;
+    stopLiveTranscribe();
+    resetRecordingRuntimeState();
+    applyRecordingBackgroundThrottling();
+    updateTrayIcon(false);
+  }
+}
 
 // Valid recording_started `trigger` values. Whitelisted so a stale/forged
 // renderer arg can't smuggle an arbitrary string into PostHog.
 const RECORDING_TRIGGERS = new Set(['manual', 'notification_click', 'hotkey', 'tray', 'url_scheme']);
 
 ipcMain.handle('start-recording-ui', async (_, sessionName, trigger, appendTo) => {
+  const requestVersion = recordingRequestVersion;
   try {
     if (pendingCaptureStop) {
-      await pendingCaptureStop.promise;
+      pendingRecordingStarts++;
+      try {
+        await pendingCaptureStop.promise;
+      } finally {
+        pendingRecordingStarts--;
+      }
+      if (requestVersion !== recordingRequestVersion) {
+        return { success: false, cancelled: true, error: 'Recording start cancelled' };
+      }
       if (pendingCaptureStop) {
         return { success: false, error: 'Previous recording is still closing' };
       }
@@ -6775,15 +6826,24 @@ ipcMain.handle('start-recording-ui', async (_, sessionName, trigger, appendTo) =
     // JSON under them) would otherwise pass and get rewritten into a "note" by
     // _append_segment_to_note. A bad target degrades to a normal new-note
     // recording rather than failing the start.
-    currentRecordingAppendTarget = null;
+    let validatedAppendTarget = null;
     if (appendTo && typeof appendTo === 'string') {
       const validatedAppend = await validateMeetingFilePath(appendTo);
       if (!validatedAppend.error) {
-        currentRecordingAppendTarget = validatedAppend.realPath;
+        validatedAppendTarget = validatedAppend.realPath;
       } else {
         sendDebugLog('[append] invalid or missing append target; recording as a new note');
       }
     }
+    if (requestVersion !== recordingRequestVersion) {
+      return { success: false, cancelled: true, error: 'Recording start cancelled' };
+    }
+    // A second start can pass the first guard while the append-path check is
+    // awaiting I/O. Recheck ownership before mutating the live session.
+    if (currentRecordingProcess || systemAudioRecordingActive) {
+      return { success: false, error: 'Recording already in progress' };
+    }
+    currentRecordingAppendTarget = validatedAppendTarget;
 
     const actualSessionName = sessionName || 'Note';
     // Clear any stale name-keyed draft notes before this recording starts, so a
@@ -6814,6 +6874,8 @@ ipcMain.handle('start-recording-ui', async (_, sessionName, trigger, appendTo) =
     currentRecordingSessionName = actualSessionName;
     activeSysAudioSummaryFile = null;
     startRecordingRuntimeState();
+    captureClaimedRecordingId = null;
+    captureOwnerWebContents = null;
     // Flip the active flag immediately so the queue handler reports
     // hasRecording=true on the very next poll, which is what cues the renderer
     // hook to fire startCapture. reportSystemAudioState then re-affirms it on
@@ -7019,13 +7081,23 @@ ipcMain.handle('resume-recording-ui', async () => {
   }
 });
 
-ipcMain.handle('stop-recording-ui', async () => {
+ipcMain.handle('stop-recording-ui', async (event) => {
+  // Also cancels a start waiting for the previous capture or append validation.
+  recordingRequestVersion++;
   try {
+    if (!systemAudioRecordingActive && !currentRecordingProcess) {
+      return { success: true, message: 'Recording stopped', summaryFile: null };
+    }
     const stoppingId = recordingRuntimeState.startedAtMs
       ? String(recordingRuntimeState.startedAtMs) : null;
+    if (stoppingId && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('recording-stop-requested', { recordingId: stoppingId });
+    }
     // Install the waiter before exposing hasRecording=false. The renderer's
     // final inactive report comes only after the file and processing handoff.
-    if (systemAudioRecordingActive && stoppingId && !pendingCaptureStop) {
+    if (systemAudioRecordingActive && stoppingId &&
+        (captureClaimedRecordingId === stoppingId || activeSysAudioWriteStream) &&
+        !pendingCaptureStop) {
       let releaseStopCall;
       const done = new Promise((resolve) => { releaseStopCall = resolve; });
       const timeout = setTimeout(() => {
@@ -7034,6 +7106,7 @@ ipcMain.handle('stop-recording-ui', async () => {
       }, 8000);
       pendingCaptureStop = {
         recordingId: stoppingId,
+        owner: captureOwnerWebContents || event.sender,
         promise: done,
         settle: () => {
           clearTimeout(timeout);
@@ -10394,6 +10467,7 @@ ipcMain.handle('get-recordings-dir', async () => {
 // mid-capture) so a stale fd can't outlive its recording.
 let activeSysAudioWriteStream = null;
 let activeSysAudioFilePath = null;
+let activeSysAudioFileRecordingId = null;
 let activeSysAudioBytesWritten = 0;
 // Deterministic summary-file path for the current recording, derived from the
 // audio filename at open. Kept separate from activeSysAudioFilePath (which the
@@ -10401,8 +10475,13 @@ let activeSysAudioBytesWritten = 0;
 // placeholder even if close raced ahead. Reset at the next open.
 let activeSysAudioSummaryFile = null;
 
-ipcMain.handle('open-system-audio-file', async (_event, sessionName) => {
+ipcMain.handle('open-system-audio-file', async (_event, sessionName, recordingId) => {
   try {
+    const currentId = recordingRuntimeState.startedAtMs
+      ? String(recordingRuntimeState.startedAtMs) : null;
+    if (recordingId && (!systemAudioRecordingActive || recordingId !== currentId)) {
+      return { success: false, error: 'Recording is no longer active' };
+    }
     // Reclaim a stream left open by a prior recording that never cleanly
     // stopped (e.g. a renderer reload mid-capture). End (flush) it and leave
     // its partial file on disk under recordings/ — abandoned rather than
@@ -10412,6 +10491,7 @@ ipcMain.handle('open-system-audio-file', async (_event, sessionName) => {
       try { activeSysAudioWriteStream.end(); } catch (_) { /* already ended */ }
       activeSysAudioWriteStream = null;
       activeSysAudioFilePath = null;
+      activeSysAudioFileRecordingId = null;
       activeSysAudioSummaryFile = null;
     }
     const dir = resolveRecordingsDir();
@@ -10429,11 +10509,13 @@ ipcMain.handle('open-system-audio-file', async (_event, sessionName) => {
       if (activeSysAudioWriteStream === stream) {
         activeSysAudioWriteStream = null;
         activeSysAudioFilePath = null;
+        activeSysAudioFileRecordingId = null;
         activeSysAudioBytesWritten = 0;
       }
     });
     activeSysAudioWriteStream = stream;
     activeSysAudioFilePath = filePath;
+    activeSysAudioFileRecordingId = recordingId || null;
     activeSysAudioSummaryFile = summaryFileForAudio(filePath);
     activeSysAudioBytesWritten = 0;
     sendDebugLog(`[sysaudio] opened ${filename} for incremental write`);
@@ -10444,8 +10526,11 @@ ipcMain.handle('open-system-audio-file', async (_event, sessionName) => {
   }
 });
 
-ipcMain.handle('append-system-audio-chunk', async (_event, payload) => {
+ipcMain.handle('append-system-audio-chunk', async (_event, payload, recordingId) => {
   try {
+    if (recordingId && recordingId !== activeSysAudioFileRecordingId) {
+      return { success: false, error: 'Recording file belongs to another session' };
+    }
     if (!activeSysAudioWriteStream) {
       return { success: false, error: 'No open system audio file' };
     }
@@ -10475,12 +10560,16 @@ ipcMain.handle('append-system-audio-chunk', async (_event, payload) => {
   }
 });
 
-ipcMain.handle('close-system-audio-file', async () => {
+ipcMain.handle('close-system-audio-file', async (_event, recordingId) => {
+  if (recordingId && recordingId !== activeSysAudioFileRecordingId) {
+    return { success: false, error: 'Recording file belongs to another session' };
+  }
   const stream = activeSysAudioWriteStream;
   const filePath = activeSysAudioFilePath;
   const bytesWritten = activeSysAudioBytesWritten;
   activeSysAudioWriteStream = null;
   activeSysAudioFilePath = null;
+  activeSysAudioFileRecordingId = null;
   activeSysAudioBytesWritten = 0;
   if (!stream) {
     return { success: false, error: 'No open system audio file' };
@@ -10610,7 +10699,7 @@ ipcMain.handle('process-system-audio-recording', async (event, audioFilePath, se
 
     // Capture-only T2: keep the real recorder/file IPC and stop handoff, but
     // avoid starting the model pipeline for a synthetic-audio regression.
-    if (IS_E2E && process.env.STENOAI_E2E_CAPTURE_ONLY === '1') {
+    if (ALLOW_E2E_PATH_SEAMS && process.env.STENOAI_E2E_CAPTURE_ONLY === '1') {
       return { success: true, message: 'Capture-only test handoff complete' };
     }
 
@@ -10689,10 +10778,28 @@ ipcMain.handle('process-system-audio-recording', async (event, audioFilePath, se
 // counter when the renderer reports inactive without a Python process —
 // covers the case where startCapture failed (permission denied) and we'd
 // otherwise leak recordingRuntimeState.startedAtMs.
+ipcMain.handle('claim-system-audio-capture', (event, recordingId) => {
+  if (ALLOW_E2E_PATH_SEAMS && process.env.STENOAI_E2E_REJECT_CAPTURE_CLAIM === '1') {
+    return { success: false, cancelled: true };
+  }
+  const currentId = recordingRuntimeState.startedAtMs
+    ? String(recordingRuntimeState.startedAtMs) : null;
+  if (!systemAudioRecordingActive || !recordingId || recordingId !== currentId) {
+    return { success: false, cancelled: true };
+  }
+  captureClaimedRecordingId = recordingId;
+  captureOwnerWebContents = event.sender;
+  return { success: true };
+});
+
 ipcMain.on('system-audio-recording-state', (event, isRecording, recordingId) => {
   if (!isRecording && pendingCaptureStop &&
       (recordingId == null || pendingCaptureStop.recordingId === recordingId)) {
-    pendingCaptureStop.settle();
+    // Deterministic T2 seam for Stop while the next Start waits. Packaged
+    // builds cannot hold a capture acknowledgement through environment flags.
+    if (!(ALLOW_E2E_PATH_SEAMS && process.env.STENOAI_E2E_HOLD_CAPTURE_ACK === '1')) {
+      pendingCaptureStop.settle();
+    }
   }
   const currentId = recordingRuntimeState.startedAtMs
     ? String(recordingRuntimeState.startedAtMs) : null;
@@ -10702,6 +10809,11 @@ ipcMain.on('system-audio-recording-state', (event, isRecording, recordingId) => 
   if (recordingId != null && recordingId !== currentId) {
     sendDebugLog(`[sysaudio] ignored stale state for recording ${recordingId}`);
     return;
+  }
+  if (isRecording && currentId) {
+    // Compatibility with callers that report active without an explicit claim.
+    captureClaimedRecordingId = currentId;
+    captureOwnerWebContents = event.sender;
   }
   sendDebugLog(`[sysaudio] state -> ${isRecording ? 'true' : 'false'} (was ${systemAudioRecordingActive})`);
   systemAudioRecordingActive = isRecording;
