@@ -232,6 +232,67 @@ test('switched off, nothing is looked up', async () => {
   assert.strictEqual(imcp.lookups, 0);
 });
 
+for (const reenable of [false, true]) {
+  test(`switching off cancels a pending Contacts lookup${reenable ? ', even after re-enabling' : ''}`, async () => {
+    let releaseContact;
+    let reportLookup;
+    const contact = new Promise((resolve) => { releaseContact = resolve; });
+    const started = new Promise((resolve) => { reportLookup = resolve; });
+    const { callerId, imcp, applied } = setup({ history: [entry({ start: 0, duration: 113 })] });
+    imcp.contactName = () => { reportLookup(); return contact; };
+    callerId.micEvent(mic('start', 0.4));
+    callerId.recordingStarted('stem', ms(1));
+    callerId.micEvent(mic('stop', 56));
+    callerId.recordingStopped(ms(58));
+    await started;
+    callerId.setEnabled(false);
+    if (reenable) callerId.setEnabled(true);
+    releaseContact('Erika Mustermann');
+    await callerId.idle();
+    assert.deepStrictEqual(applied, []);
+  });
+}
+
+test('switching off cancels the deferred update after processing', async () => {
+  let busy = true;
+  const { callerId, applied } = setup({ history: [entry({ start: 0, duration: 113 })], busy: () => busy });
+  callerId.micEvent(mic('start', 0.4));
+  callerId.recordingStarted('stem', ms(1));
+  callerId.micEvent(mic('stop', 56));
+  callerId.recordingStopped(ms(58));
+  await callerId.idle();
+  assert.deepStrictEqual(applied.map((a) => a.sidecarOnly), [true]);
+  callerId.setEnabled(false);
+  busy = false;
+  callerId.processingFinished(['stem']);
+  await callerId.idle();
+  assert.deepStrictEqual(applied.map((a) => a.sidecarOnly), [true]);
+});
+
+test('switching off cancels a write queued behind another recording of the note', async () => {
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  const { callerId, applied } = setup({
+    history: [entry({ id: '1', start: 0, duration: 120 }),
+      entry({ id: '2', start: 100, duration: 120 })],
+    apply: async () => pending,
+  });
+  callerId.micEvent(mic('start', 0.4));
+  callerId.recordingStarted('note', ms(1));
+  callerId.micEvent(mic('stop', 60));
+  callerId.recordingStopped(ms(61));
+  callerId.micEvent({ ...mic('start', 100.4), pid: 43 });
+  callerId.recordingStarted('note', ms(101));
+  callerId.micEvent({ ...mic('stop', 160), pid: 43 });
+  callerId.recordingStopped(ms(161));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.strictEqual(applied.length, 1);
+  callerId.setEnabled(false);
+  release();
+  await callerId.idle();
+  assert.strictEqual(applied.length, 1);
+});
+
 test('iMCP not ready: the lookup gives up without an error', async () => {
   const { callerId, imcp, applied } = setup({ history: [entry({ start: 0, duration: 113 })] });
   imcp.status = { state: 'not-running', contacts: false };

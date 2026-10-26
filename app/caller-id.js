@@ -55,6 +55,7 @@ class CallerId {
     Object.assign(this, { imcp, applyCallInfo, isProcessing, log, now, sleep,
       lookupAttempts, lookupIntervalMs, recordDelayMs });
     this.enabled = false;
+    this._generation = 0;
     this._sessions = [];    // call audio on this Mac: { key, startedAt, endedAt }
     this._recordings = [];  // { stem, startedAt, stoppedAt, calls, tried, finalApply }
     this._inflight = new Set();
@@ -72,9 +73,18 @@ class CallerId {
   }
 
   setEnabled(enabled) {
-    this.enabled = Boolean(enabled);
+    const next = Boolean(enabled);
+    if (next !== this.enabled) this._generation += 1;
+    this.enabled = next;
     if (this.enabled) this.imcp.start();
-    else this.imcp.stop();
+    else {
+      this.imcp.stop();
+      for (const rec of this._recordings) rec.finalApply = false;
+    }
+  }
+
+  _isCurrent(rec) {
+    return this.enabled && rec.generation === this._generation;
   }
 
   /** Feed every mic-monitor event; only call audio is kept. */
@@ -97,7 +107,7 @@ class CallerId {
   /** A recording began; `stem` names the note it lands in. */
   recordingStarted(stem, at = this.now()) {
     if (!stem) return;
-    this._recordings.push({ stem, startedAt: at, stoppedAt: null, calls: new Map(),
+    this._recordings.push({ stem, generation: this._generation, startedAt: at, stoppedAt: null, calls: new Map(),
       tried: new Set(), finalApply: false });
   }
 
@@ -117,7 +127,7 @@ class CallerId {
   /** A processing job finished; `stems` are the notes it wrote. */
   processingFinished(stems) {
     for (const rec of this._recordings) {
-      if (rec.finalApply && stems.includes(rec.stem)) {
+      if (this._isCurrent(rec) && rec.finalApply && stems.includes(rec.stem)) {
         rec.finalApply = false;
         this._run(this._apply(rec, false));
       }
@@ -131,7 +141,7 @@ class CallerId {
   }
 
   async _lookup(rec, session, { once = false } = {}) {
-    if (!this.enabled) return;
+    if (!this._isCurrent(rec)) return;
     const attempt = `${session.key}@${session.startedAt}:${session.endedAt ?? 'running'}`;
     if (rec.tried.has(attempt)) return;
     rec.tried.add(attempt);
@@ -142,7 +152,7 @@ class CallerId {
     for (let i = 0; i < attempts; i += 1) {
       if (i > 0) await this.sleep(this.lookupIntervalMs);
       else if (audio.endedAt) await this.sleep(this.recordDelayMs);
-      if (!this.enabled) return;
+      if (!this._isCurrent(rec)) return;
       if (this.imcp.status.state !== 'ready') continue;
       try {
         const call = matchCall(await this.imcp.recentCalls(RECENT_CALLS), audio);
@@ -158,6 +168,7 @@ class CallerId {
   }
 
   async _found(rec, call) {
+    if (!this._isCurrent(rec)) return;
     const key = call.id ?? call.startedAt.toISOString();
     if (rec.calls.has(key)) return;
     let name = call.name;
@@ -167,6 +178,9 @@ class CallerId {
         return null;
       });
     }
+    // Turning the feature off cancels this lookup, even if it is enabled
+    // again before the Contacts request resolves.
+    if (!this._isCurrent(rec)) return;
     rec.calls.set(key, { name: name || null, number: call.number, direction: call.direction,
       service: call.service, started_at: call.startedAt.toISOString() });
     this.log(`[caller-id] call found for a recording (${name ? 'named' : 'number only'})`);
@@ -179,7 +193,11 @@ class CallerId {
   // stored, and two writes at once could each miss the other's.
   _apply(rec, sidecarOnly) {
     const write = (this._writes.get(rec.stem) || Promise.resolve())
-      .then(() => this.applyCallInfo(rec.stem, [...rec.calls.values()], { sidecarOnly }))
+      .then(() => {
+        if (this._isCurrent(rec)) {
+          return this.applyCallInfo(rec.stem, [...rec.calls.values()], { sidecarOnly });
+        }
+      })
       .catch((error) => this.log(`[caller-id] apply-call-info failed: ${error?.message || error}`));
     this._writes.set(rec.stem, write);
     write.then(() => { if (this._writes.get(rec.stem) === write) this._writes.delete(rec.stem); });
