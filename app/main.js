@@ -7096,6 +7096,10 @@ ipcMain.handle('stop-recording-ui', async (event) => {
   recordingRequestVersion++;
   try {
     if (!systemAudioRecordingActive && !currentRecordingProcess) {
+      // Capture may already have reported inactive (e.g. it failed to start).
+      // The session name is only cleared on stop, and a stale one would keep
+      // suppressing that meeting's reminder and auto-open.
+      currentRecordingSessionName = null;
       return { success: true, message: 'Recording stopped', summaryFile: null };
     }
     const stoppingId = recordingRuntimeState.startedAtMs

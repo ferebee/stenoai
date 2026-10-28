@@ -23,8 +23,9 @@ type StenoWindow = Window & {
       }) => Promise<ShowResult>;
     };
     recording: {
-      start: (name?: string) => Promise<{ success: boolean }>;
+      start: (name?: string) => Promise<{ success: boolean; recordingId?: string }>;
       stop: () => Promise<{ success: boolean }>;
+      reportSystemAudioState: (active: boolean, recordingId: string) => void;
     };
   };
 };
@@ -92,6 +93,31 @@ test('pre-meeting notification is suppressed for the meeting being recorded (nam
   await expect.poll(async () => (await showPremeeting(page, EVT)).shown).not.toBe(false);
 
   expect(fileSig(realUserDataDir())).toBe(realDirBefore);
+});
+
+test('stop clears the suppression even when capture already reported inactive', async ({
+  launchApp,
+  userDataDir,
+}) => {
+  // A runner without a capture device (Linux CI) reports inactive right after
+  // start. Stop must still clear the session name, or the reminder for that
+  // meeting stays suppressed until the next recording.
+  enableDeterministicRecording(userDataDir);
+  const { page } = await launchApp();
+
+  const started = await page.evaluate(
+    (name) => (window as StenoWindow).stenoai.recording.start(name),
+    EVT.title,
+  );
+  expect(started.success).toBe(true);
+  await page.evaluate(
+    (id) => (window as StenoWindow).stenoai.recording.reportSystemAudioState(false, id),
+    started.recordingId!,
+  );
+  await expect.poll(async () => (await showPremeeting(page, EVT)).shown).toBe(false);
+
+  await page.evaluate(() => (window as StenoWindow).stenoai.recording.stop());
+  await expect.poll(async () => (await showPremeeting(page, EVT)).shown).not.toBe(false);
 });
 
 test("the pre-meeting toast's accent bar carries the calendar event's colour (#412)", async ({
