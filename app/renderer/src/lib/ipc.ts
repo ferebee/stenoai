@@ -378,7 +378,7 @@ export type RecordingTrigger = 'manual' | 'notification_click' | 'auto_record' |
  *  from Settings, so this does not mean "first run". */
 export type TelemetryToggleSource = 'setup' | 'settings' | 'consent';
 
-export type StartRecordingResponse = Result<{ message: string; sessionName?: string }>;
+export type StartRecordingResponse = Result<{ message: string; sessionName?: string; recordingId?: string }> & { cancelled?: boolean };
 export type StopRecordingResponse = Result<{
   message: string;
   sessionName?: string;
@@ -784,6 +784,30 @@ export type GetDockIconResponse = Result<{ hide_dock_icon: boolean }>;
 export type GetMenuBarIconResponse = Result<{ show_menu_bar_icon: boolean }>;
 export type GetSystemAudioResponse = Result<{ system_audio_enabled: boolean }>;
 export type GetAutoDetectMeetingsResponse = Result<{ auto_detect_meetings_enabled: boolean }>;
+/** Caller recognition through iMCP (macOS). States mirror app/imcp-client.js STATUS. */
+export type CallerIdState =
+  | 'off'
+  | 'unsupported'
+  | 'not-installed'
+  | 'not-running'
+  | 'awaiting-approval'
+  | 'declined'
+  | 'phone-off'
+  | 'ready';
+export interface CallerIdStatus {
+  state: CallerIdState;
+  /** Whether iMCP offers Contacts, so callers get names and not only numbers. */
+  contacts: boolean;
+}
+export type GetCallerIdResponse = Result<{
+  supported: boolean;
+  caller_id_enabled: boolean;
+  /** The mic monitor (Auto-detected meetings) is what notices a call. */
+  meeting_detection: boolean;
+  status: CallerIdStatus;
+  download_url: string;
+  homebrew: string;
+}>;
 export type GetPremeetingNotificationsResponse = Result<{
   premeeting_notifications_enabled: boolean;
 }>;
@@ -1152,7 +1176,8 @@ export interface StenoaiBridge {
     stop: RequestFn<[], StopRecordingResponse>;
     pause: RequestFn<[], PauseRecordingResponse>;
     resume: RequestFn<[], ResumeRecordingResponse>;
-    reportSystemAudioState: SendFn<[active: boolean]>;
+    reportSystemAudioState: SendFn<[active: boolean, recordingId?: string]>;
+    claimSystemAudioCapture: RequestFn<[recordingId: string], { success: boolean; cancelled?: boolean }>;
     /** Hint that a recording may be imminent so main can re-warm the Parakeet
      *  model. Throttled main-side. Fire-and-forget. */
     hintWarmup: SendFn<[]>;
@@ -1170,9 +1195,9 @@ export interface StenoaiBridge {
     /** Open an on-disk WebM file for the renderer-driven recording. Chunks are
      *  appended as they arrive (see appendSystemAudioChunk) so a crash leaves a
      *  processable file instead of losing the whole recording. */
-    openSystemAudioFile: RequestFn<[name: string], Result<{ filePath: string }>>;
-    appendSystemAudioChunk: RequestFn<[bytes: Uint8Array], Result<Record<string, never>>>;
-    closeSystemAudioFile: RequestFn<[], Result<{ filePath: string }>>;
+    openSystemAudioFile: RequestFn<[name: string, recordingId?: string], Result<{ filePath: string }>>;
+    appendSystemAudioChunk: RequestFn<[bytes: Uint8Array, recordingId?: string], Result<Record<string, never>>>;
+    closeSystemAudioFile: RequestFn<[recordingId?: string], Result<{ filePath: string }>>;
     /** Linux-only: starts a pw-record subprocess in main capturing the default
      *  sink's monitor (see app/linux-loopback.js). PCM arrives via
      *  on.linuxLoopbackChunk, not through getDisplayMedia. */
@@ -1374,6 +1399,9 @@ export interface StenoaiBridge {
     setSystemAudio: RequestFn<[v: boolean], Result<Record<string, never>>>;
     getAutoDetectMeetings: RequestFn<[], GetAutoDetectMeetingsResponse>;
     setAutoDetectMeetings: RequestFn<[v: boolean], Result<Record<string, never>>>;
+    getCallerId: RequestFn<[], GetCallerIdResponse>;
+    setCallerId: RequestFn<[v: boolean], GetCallerIdResponse>;
+    openImcpDownload: RequestFn<[], Result<Record<string, never>>>;
     getPremeetingNotifications: RequestFn<[], GetPremeetingNotificationsResponse>;
     setPremeetingNotifications: RequestFn<[v: boolean], Result<Record<string, never>>>;
     getAutoRecordMeetings: RequestFn<[], GetAutoRecordMeetingsResponse>;
@@ -1554,6 +1582,7 @@ export interface StenoaiBridge {
     updateError: Subscribe<UpdateErrorEvent>;
     updateErrorCleared: Subscribe<void>;
     googleAuthChanged: Subscribe<{ connected: boolean }>;
+    callerIdStatus: Subscribe<CallerIdStatus>;
     outlookAuthChanged: Subscribe<{ connected: boolean }>;
     shortcutStartRecording: Subscribe<ShortcutStartRecordingEvent>;
     shortcutStopRecording: Subscribe<void>;
@@ -1562,6 +1591,7 @@ export interface StenoaiBridge {
     autoRecordRequested: Subscribe<{ sessionName?: string; appName?: string; unattended?: boolean }>;
     openLiveNote: Subscribe<void>;
     autoPauseRequested: Subscribe<void>;
+    recordingStopRequested: Subscribe<{ recordingId: string }>;
     autoResumeRequested: Subscribe<void>;
     autoSummariseRequested: Subscribe<void>;
     /** Main asks the renderer to generate notes for a transcript-only note in
