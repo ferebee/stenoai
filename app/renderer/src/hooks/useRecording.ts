@@ -22,6 +22,9 @@ const queueKey = ['recording', 'queue'] as const;
 // Shared across the many useRecording consumers. A Stop invalidates any Start
 // still awaiting queue cancellation or main's previous-capture handoff.
 let recordingStopVersion = 0;
+// A later Start owns the shared draft key, so a cancelled earlier Start must
+// not restore its snapshot over it.
+let recordingStartVersion = 0;
 
 // ── Shared window-visibility subscription ───────────────────────────────
 //
@@ -124,6 +127,7 @@ export function useRecording() {
   const startRecording = React.useCallback(
     async (name?: string, trigger: RecordingTrigger = 'manual', appendTo?: string) => {
       const requestStopVersion = recordingStopVersion;
+      const requestStartVersion = ++recordingStartVersion;
       // Optimistic cache write so the UI flips to status='recording'
       // instantly. The backend's start-recording-ui has a 2s warm-up and
       // the next queue poll (1s) will reconcile sessionName + elapsed.
@@ -186,13 +190,19 @@ export function useRecording() {
       // optional live-note editor but is never forced.
       try {
         const response = await ipc().recording.start(name, trigger, appendTo);
-        if (requestStopVersion !== recordingStopVersion) return;
         if (!response.success && response.cancelled) {
-          if (priorDraft) useLiveDraftStore.getState().restore(optimisticName, priorDraft);
+          // A Stop cancelled this start before it began, so the draft cleared
+          // above still belongs to the previous session. Restore it even when
+          // that Stop already owns the queue cache.
+          if (priorDraft && requestStartVersion === recordingStartVersion) {
+            useLiveDraftStore.getState().restore(optimisticName, priorDraft);
+          }
+          if (requestStopVersion !== recordingStopVersion) return;
           qc.setQueryData(queueKey, priorQueue);
           qc.invalidateQueries({ queryKey: queueKey });
           return;
         }
+        if (requestStopVersion !== recordingStopVersion) return;
         const data = unwrap(response);
         if (data.recordingId) {
           qc.setQueryData<QueueStatus>(queueKey, (current) =>

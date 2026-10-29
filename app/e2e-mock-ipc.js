@@ -613,7 +613,9 @@ function install({ ipcMain }) {
       rec.sessionName = name && String(name).trim() ? String(name).trim() : 'Note';
       rec.appendTo = appendTo && String(appendTo).trim() ? String(appendTo).trim() : null;
       rec.startedAt = Date.now();
-      rec.recordingId = String(rec.startedAt);
+      // Unique even for two starts in one millisecond, like main.js.
+      rec.lastRecordingId = Math.max(rec.startedAt, (rec.lastRecordingId || 0) + 1);
+      rec.recordingId = String(rec.lastRecordingId);
       return { success: true, sessionName: rec.sessionName, recordingId: rec.recordingId };
     },
     'claim-system-audio-capture': async (_event, recordingId) => ({

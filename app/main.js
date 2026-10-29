@@ -6769,6 +6769,10 @@ let captureOwnerWebContents = null;
 // still has to flush and close the WebM. A succeeding start must wait for that
 // handoff so A's final chunk/append target cannot be attributed to B.
 let pendingCaptureStop = null;
+// The renderer's processing handoff for the stopped recording. It reads the
+// global append target and live transcript after an await, so a crash in the
+// middle must not release the next start before it finishes.
+let sysAudioHandoff = null;
 
 // A renderer reload/crash cannot deliver its final inactive report. It also
 // cannot write more audio: abandon only the file owned by that renderer, then
@@ -6786,7 +6790,15 @@ function abandonCaptureForRenderer(webContents) {
     activeSysAudioBytesWritten = 0;
     try { stream.end(); } catch (_) { /* preserve the partial file */ }
   }
-  if (ownsStop) pendingCaptureStop.settle();
+  // Nothing restarts a Linux loopback once the session is abandoned, so stop
+  // pw-record here rather than leave it capturing system audio. Queue it even
+  // with no capture referenced: a start still in the queue sets one later.
+  if (process.platform === 'linux') void stopActiveLinuxLoopback();
+  if (ownsStop) {
+    const stop = pendingCaptureStop;
+    if (sysAudioHandoff) sysAudioHandoff.finally(() => stop.settle());
+    else stop.settle();
+  }
   captureClaimedRecordingId = null;
   captureOwnerWebContents = null;
   if (systemAudioRecordingActive && String(recordingRuntimeState.startedAtMs) === abandonedId) {
@@ -7118,16 +7130,19 @@ ipcMain.handle('stop-recording-ui', async (event) => {
         sendDebugLog('[sysaudio] capture close timed out; a new recording remains blocked until cleanup');
         releaseStopCall();
       }, 8000);
-      pendingCaptureStop = {
+      const stop = {
         recordingId: stoppingId,
         owner: captureOwnerWebContents || event.sender,
         promise: done,
+        // A crashed renderer's settle can be deferred behind its processing
+        // handoff; it must never clear a later waiter.
         settle: () => {
           clearTimeout(timeout);
-          pendingCaptureStop = null;
+          if (pendingCaptureStop === stop) pendingCaptureStop = null;
           releaseStopCall();
         },
       };
+      pendingCaptureStop = stop;
     }
     // Stopping ends any sleep-pause state — don't prompt Resume on a
     // recording that no longer exists.
@@ -10715,15 +10730,19 @@ ipcMain.handle('start-linux-loopback', () => queueLinuxLoopback(async () => {
   }
 }));
 
-ipcMain.handle('stop-linux-loopback', () => queueLinuxLoopback(async () => {
-  const capture = activeLinuxLoopback;
-  activeLinuxLoopback = null;
-  if (!capture) return { success: true };
-  capture.stdout.removeAllListeners('data');
-  await capture.stop();
-  sendDebugLog('[linux-loopback] stopped');
-  return { success: true };
-}));
+function stopActiveLinuxLoopback() {
+  return queueLinuxLoopback(async () => {
+    const capture = activeLinuxLoopback;
+    activeLinuxLoopback = null;
+    if (!capture) return { success: true };
+    capture.stdout.removeAllListeners('data');
+    await capture.stop();
+    sendDebugLog('[linux-loopback] stopped');
+    return { success: true };
+  });
+}
+
+ipcMain.handle('stop-linux-loopback', () => stopActiveLinuxLoopback());
 
 // A failed renderer-side capture (mic permission denied, no audio device)
 // would otherwise be silent — the optimistic "recording" pill is dropped via
@@ -10753,7 +10772,16 @@ ipcMain.on('recording-capture-error', (_event, message, name, phase) => {
   showRecordingFailedNotification(buildCaptureErrorBody({ name, phase }));
 });
 
-ipcMain.handle('process-system-audio-recording', async (event, audioFilePath, sessionName) => {
+ipcMain.handle('process-system-audio-recording', (_event, audioFilePath, sessionName) => {
+  const handoff = queueSystemAudioRecording(audioFilePath, sessionName);
+  sysAudioHandoff = handoff;
+  handoff.finally(() => {
+    if (sysAudioHandoff === handoff) sysAudioHandoff = null;
+  });
+  return handoff;
+});
+
+async function queueSystemAudioRecording(audioFilePath, sessionName) {
   try {
     sendDebugLog(`Queuing system audio recording for processing: ${audioFilePath}`);
 
@@ -10842,7 +10870,7 @@ ipcMain.handle('process-system-audio-recording', async (event, audioFilePath, se
     trackEvent('error_occurred', { error_type: 'process_system_audio', reason: classifyErrorReason(error) });
     return { success: false, error: error.message };
   }
-});
+}
 
 // Track system audio recording state for tray icon. Also resets the elapsed
 // counter when the renderer reports inactive without a Python process —

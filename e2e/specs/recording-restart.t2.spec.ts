@@ -28,11 +28,15 @@ async function installSyntheticMic(page: import('@playwright/test').Page) {
   await page.evaluate(() => {
     const audio = new AudioContext();
     const source = audio.createOscillator();
-    const destination = audio.createMediaStreamDestination();
     source.frequency.value = 440;
-    source.connect(destination);
     source.start();
-    navigator.mediaDevices.getUserMedia = async () => destination.stream;
+    // A fresh stream per call: the hook stops the previous one's track on
+    // teardown, and an ended track would let a restart record silence.
+    navigator.mediaDevices.getUserMedia = async () => {
+      const destination = audio.createMediaStreamDestination();
+      source.connect(destination);
+      return destination.stream;
+    };
     navigator.mediaDevices.getDisplayMedia = async () => {
       throw new DOMException('Synthetic mic-only test', 'NotAllowedError');
     };
